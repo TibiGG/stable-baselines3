@@ -13,6 +13,7 @@ GymEnv = Union[gym.Env, vec_env.VecEnv]
 GymObs = Union[Tuple, Dict[str, Any], np.ndarray, int]
 GymStepReturn = Tuple[GymObs, float, bool, Dict]
 TensorDict = Dict[Union[str, int], th.Tensor]
+TensorTuple = Tuple[Dict[Union[str, int], th.Tensor]]
 OptimizerStateDict = Dict[str, Any]
 MaybeCallback = Union[None, Callable, List[callbacks.BaseCallback], callbacks.BaseCallback]
 
@@ -51,6 +52,14 @@ class DictReplayBufferSamples(ReplayBufferSamples):
     observations: TensorDict
     actions: th.Tensor
     next_observations: th.Tensor
+    dones: th.Tensor
+    rewards: th.Tensor
+
+
+class MultiAgentReplayBufferSamples(ReplayBufferSamples):
+    observations: TensorTuple
+    actions: th.Tensor
+    next_observations: TensorTuple
     dones: th.Tensor
     rewards: th.Tensor
 
