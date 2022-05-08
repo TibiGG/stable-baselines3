@@ -43,7 +43,7 @@ def dict_to_obs(obs_space: gym.spaces.Space, obs_dict: Dict[Any, np.ndarray]) ->
         return obs_dict[None]
 
 
-def obs_space_info(obs_space: gym.spaces.Space) -> Tuple[List[str], Dict[Any, Tuple[int, ...]], Dict[Any, np.dtype]]:
+def obs_space_info(obs_space: gym.spaces.Space, is_marl: bool = False) -> Tuple[List[str], Dict[Any, Tuple[int, ...]], Dict[Any, np.dtype]]:
     """
     Get dict-structured information about a gym.Space.
 
@@ -57,6 +57,9 @@ def obs_space_info(obs_space: gym.spaces.Space) -> Tuple[List[str], Dict[Any, Tu
         shapes: a dict mapping keys to shapes.
         dtypes: a dict mapping keys to dtypes.
     """
+    if is_marl:
+        obs_space = obs_space.spaces[0]
+
     check_for_nested_spaces(obs_space)
     if isinstance(obs_space, gym.spaces.Dict):
         assert isinstance(obs_space.spaces, OrderedDict), "Dict space must have ordered subspaces"

@@ -12,15 +12,19 @@ import numpy as np
 import torch as th
 
 from stable_baselines3.common import utils
-from stable_baselines3.common.callbacks import BaseCallback, CallbackList, ConvertCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, \
+    ConvertCallback, EvalCallback
 from stable_baselines3.common.env_util import is_wrapped
 from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.policies import BasePolicy
-from stable_baselines3.common.preprocessing import check_for_nested_spaces, is_image_space, is_image_space_channels_first
-from stable_baselines3.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
+from stable_baselines3.common.preprocessing import check_for_nested_spaces, \
+    is_image_space, is_image_space_channels_first
+from stable_baselines3.common.save_util import load_from_zip_file, \
+    recursive_getattr, recursive_setattr, save_to_zip_file
+from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, \
+    Schedule
 from stable_baselines3.common.utils import (
     check_for_correct_spaces,
     get_device,
@@ -39,7 +43,8 @@ from stable_baselines3.common.vec_env import (
 )
 
 
-def maybe_make_env(env: Union[GymEnv, str, None], verbose: int) -> Optional[GymEnv]:
+def maybe_make_env(env: Union[GymEnv, str, None], verbose: int) -> Optional[
+    GymEnv]:
     """If env is a string, make the environment; otherwise, return env.
 
     :param env: The environment to learn from.
@@ -86,21 +91,23 @@ class BaseAlgorithm(ABC):
     policy_aliases: Dict[str, Type[BasePolicy]] = {}
 
     def __init__(
-        self,
-        policy: Type[BasePolicy],
-        env: Union[GymEnv, str, None],
-        learning_rate: Union[float, Schedule],
-        policy_kwargs: Optional[Dict[str, Any]] = None,
-        tensorboard_log: Optional[str] = None,
-        verbose: int = 0,
-        device: Union[th.device, str] = "auto",
-        support_multi_env: bool = False,
-        create_eval_env: bool = False,
-        monitor_wrapper: bool = True,
-        seed: Optional[int] = None,
-        use_sde: bool = False,
-        sde_sample_freq: int = -1,
-        supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
+            self,
+            policy: Type[BasePolicy],
+            env: Union[GymEnv, str, None],
+            learning_rate: Union[float, Schedule],
+            policy_kwargs: Optional[Dict[str, Any]] = None,
+            tensorboard_log: Optional[str] = None,
+            verbose: int = 0,
+            device: Union[th.device, str] = "auto",
+            support_multi_env: bool = False,
+            create_eval_env: bool = False,
+            monitor_wrapper: bool = True,
+            seed: Optional[int] = None,
+            use_sde: bool = False,
+            sde_sample_freq: int = -1,
+            supported_action_spaces: Optional[
+                Tuple[gym.spaces.Space, ...]] = None,
+            is_marl: bool = False,
     ):
         if isinstance(policy, str):
             self.policy_class = self._get_policy_from_name(policy)
@@ -152,6 +159,8 @@ class BaseAlgorithm(ABC):
         self._logger = None  # type: Logger
         # Whether the user passed a custom logger or not
         self._custom_logger = False
+        # Keep track of whether the policy is multi-agent
+        self.is_marl = is_marl
 
         # Create and wrap the env if needed
         if env is not None:
@@ -160,10 +169,14 @@ class BaseAlgorithm(ABC):
                     self.eval_env = maybe_make_env(env, self.verbose)
 
             env = maybe_make_env(env, self.verbose)
-            env = self._wrap_env(env, self.verbose, monitor_wrapper)
+            env = self._wrap_env(env, self.verbose, monitor_wrapper, is_marl=is_marl)
 
-            self.observation_space = env.observation_space
-            self.action_space = env.action_space
+            if is_marl:
+                self.observation_space = env.observation_space.spaces[0]
+                self.action_space = env.action_space.spaces[0]
+            else:
+                self.observation_space = env.observation_space
+                self.action_space = env.action_space
             self.n_envs = env.num_envs
             self.env = env
 
@@ -179,14 +192,19 @@ class BaseAlgorithm(ABC):
                 )
 
             # Catch common mistake: using MlpPolicy/CnnPolicy instead of MultiInputPolicy
-            if policy in ["MlpPolicy", "CnnPolicy"] and isinstance(self.observation_space, gym.spaces.Dict):
-                raise ValueError(f"You must use `MultiInputPolicy` when working with dict observation space, not {policy}")
+            if policy in ["MlpPolicy", "CnnPolicy"] and isinstance(
+                    self.observation_space, gym.spaces.Dict):
+                raise ValueError(
+                    f"You must use `MultiInputPolicy` when working with dict observation space, not {policy}")
 
-            if self.use_sde and not isinstance(self.action_space, gym.spaces.Box):
-                raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
+            if self.use_sde and not isinstance(self.action_space,
+                                               gym.spaces.Box):
+                raise ValueError(
+                    "generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
 
     @staticmethod
-    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True) -> VecEnv:
+    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True,
+                  is_marl: bool = False) -> VecEnv:
         """ "
         Wrap environment with the appropriate wrappers if needed.
         For instance, to have a vectorized environment
@@ -206,10 +224,19 @@ class BaseAlgorithm(ABC):
                 print("Wrapping the env in a DummyVecEnv.")
             env = DummyVecEnv([lambda: env])
 
-        # Make sure that dict-spaces are not nested (not supported)
-        check_for_nested_spaces(env.observation_space)
+        if not is_marl:
+            # Make sure that dict-spaces are not nested (not supported)
+            check_for_nested_spaces(env.observation_space)
+        else:
+            sub_spaces = env.observation_space.spaces.values()\
+                if isinstance(env.observation_space, gym.spaces.Dict)\
+                else env.observation_space.spaces
+            for sub_space in sub_spaces:
+                check_for_nested_spaces(sub_space)
 
-        if not is_vecenv_wrapped(env, VecTransposeImage):
+        # TODO: turn the following logic back on if LIDAR needs
+        #       convolutional nets
+        if not is_vecenv_wrapped(env, VecTransposeImage) and False:
             wrap_with_vectranspose = False
             if isinstance(env.observation_space, gym.spaces.Dict):
                 # If even one of the keys is a image-space in need of transpose, apply transpose
@@ -217,10 +244,13 @@ class BaseAlgorithm(ABC):
                 # the other channel last), VecTransposeImage will throw an error
                 for space in env.observation_space.spaces.values():
                     wrap_with_vectranspose = wrap_with_vectranspose or (
-                        is_image_space(space) and not is_image_space_channels_first(space)
+                            is_image_space(
+                                space) and not is_image_space_channels_first(
+                        space)
                     )
             else:
-                wrap_with_vectranspose = is_image_space(env.observation_space) and not is_image_space_channels_first(
+                wrap_with_vectranspose = is_image_space(
+                    env.observation_space) and not is_image_space_channels_first(
                     env.observation_space
                 )
 
@@ -273,16 +303,19 @@ class BaseAlgorithm(ABC):
         """Transform to callable if needed."""
         self.lr_schedule = get_schedule_fn(self.learning_rate)
 
-    def _update_current_progress_remaining(self, num_timesteps: int, total_timesteps: int) -> None:
+    def _update_current_progress_remaining(self, num_timesteps: int,
+                                           total_timesteps: int) -> None:
         """
         Compute current progress remaining (starts from 1 and ends to 0)
 
         :param num_timesteps: current number of timesteps
         :param total_timesteps:
         """
-        self._current_progress_remaining = 1.0 - float(num_timesteps) / float(total_timesteps)
+        self._current_progress_remaining = 1.0 - float(num_timesteps) / float(
+            total_timesteps)
 
-    def _update_learning_rate(self, optimizers: Union[List[th.optim.Optimizer], th.optim.Optimizer]) -> None:
+    def _update_learning_rate(self, optimizers: Union[
+        List[th.optim.Optimizer], th.optim.Optimizer]) -> None:
         """
         Update the optimizers learning rate using the current learning rate schedule
         and the current progress remaining (from 1 to 0).
@@ -291,12 +324,14 @@ class BaseAlgorithm(ABC):
             An optimizer or a list of optimizers.
         """
         # Log the current learning rate
-        self.logger.record("train/learning_rate", self.lr_schedule(self._current_progress_remaining))
+        self.logger.record("train/learning_rate",
+                           self.lr_schedule(self._current_progress_remaining))
 
         if not isinstance(optimizers, list):
             optimizers = [optimizers]
         for optimizer in optimizers:
-            update_learning_rate(optimizer, self.lr_schedule(self._current_progress_remaining))
+            update_learning_rate(optimizer, self.lr_schedule(
+                self._current_progress_remaining))
 
     def _excluded_save_params(self) -> List[str]:
         """
@@ -356,12 +391,12 @@ class BaseAlgorithm(ABC):
         return state_dicts, []
 
     def _init_callback(
-        self,
-        callback: MaybeCallback,
-        eval_env: Optional[VecEnv] = None,
-        eval_freq: int = 10000,
-        n_eval_episodes: int = 5,
-        log_path: Optional[str] = None,
+            self,
+            callback: MaybeCallback,
+            eval_env: Optional[VecEnv] = None,
+            eval_freq: int = 10000,
+            n_eval_episodes: int = 5,
+            log_path: Optional[str] = None,
     ) -> BaseCallback:
         """
         :param callback: Callback(s) called at every step with state of the algorithm.
@@ -394,15 +429,15 @@ class BaseAlgorithm(ABC):
         return callback
 
     def _setup_learn(
-        self,
-        total_timesteps: int,
-        eval_env: Optional[GymEnv],
-        callback: MaybeCallback = None,
-        eval_freq: int = 10000,
-        n_eval_episodes: int = 5,
-        log_path: Optional[str] = None,
-        reset_num_timesteps: bool = True,
-        tb_log_name: str = "run",
+            self,
+            total_timesteps: int,
+            eval_env: Optional[GymEnv],
+            callback: MaybeCallback = None,
+            eval_freq: int = 10000,
+            n_eval_episodes: int = 5,
+            log_path: Optional[str] = None,
+            reset_num_timesteps: bool = True,
+            tb_log_name: str = "run",
     ) -> Tuple[int, BaseCallback]:
         """
         Initialize different variables needed for training.
@@ -439,7 +474,8 @@ class BaseAlgorithm(ABC):
         # Avoid resetting the environment when calling ``.learn()`` consecutive times
         if reset_num_timesteps or self._last_obs is None:
             self._last_obs = self.env.reset()  # pytype: disable=annotation-type-mismatch
-            self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)
+            self._last_episode_starts = np.ones((self.env.num_envs,),
+                                                dtype=bool)
             # Retrieve unnormalized observation for saving into the buffer
             if self._vec_normalize_env is not None:
                 self._last_original_obs = self._vec_normalize_env.get_original_obs()
@@ -451,14 +487,19 @@ class BaseAlgorithm(ABC):
 
         # Configure logger's outputs if no logger was passed
         if not self._custom_logger:
-            self._logger = utils.configure_logger(self.verbose, self.tensorboard_log, tb_log_name, reset_num_timesteps)
+            self._logger = utils.configure_logger(self.verbose,
+                                                  self.tensorboard_log,
+                                                  tb_log_name,
+                                                  reset_num_timesteps)
 
         # Create eval callback if needed
-        callback = self._init_callback(callback, eval_env, eval_freq, n_eval_episodes, log_path)
+        callback = self._init_callback(callback, eval_env, eval_freq,
+                                       n_eval_episodes, log_path)
 
         return total_timesteps, callback
 
-    def _update_info_buffer(self, infos: List[Dict[str, Any]], dones: Optional[np.ndarray] = None) -> None:
+    def _update_info_buffer(self, infos: List[Dict[str, Any]],
+                            dones: Optional[np.ndarray] = None) -> None:
         """
         Retrieve reward, episode length, episode success and update the buffer
         if using Monitor wrapper or a GoalEnv.
@@ -525,16 +566,16 @@ class BaseAlgorithm(ABC):
 
     @abstractmethod
     def learn(
-        self,
-        total_timesteps: int,
-        callback: MaybeCallback = None,
-        log_interval: int = 100,
-        tb_log_name: str = "run",
-        eval_env: Optional[GymEnv] = None,
-        eval_freq: int = -1,
-        n_eval_episodes: int = 5,
-        eval_log_path: Optional[str] = None,
-        reset_num_timesteps: bool = True,
+            self,
+            total_timesteps: int,
+            callback: MaybeCallback = None,
+            log_interval: int = 100,
+            tb_log_name: str = "run",
+            eval_env: Optional[GymEnv] = None,
+            eval_freq: int = -1,
+            n_eval_episodes: int = 5,
+            eval_log_path: Optional[str] = None,
+            reset_num_timesteps: bool = True,
     ) -> "BaseAlgorithm":
         """
         Return a trained model.
@@ -552,11 +593,11 @@ class BaseAlgorithm(ABC):
         """
 
     def predict(
-        self,
-        observation: np.ndarray,
-        state: Optional[Tuple[np.ndarray, ...]] = None,
-        episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
+            self,
+            observation: np.ndarray,
+            state: Optional[Tuple[np.ndarray, ...]] = None,
+            episode_start: Optional[np.ndarray] = None,
+            deterministic: bool = False,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
         """
         Get the policy action from an observation (and optional hidden state).
@@ -571,7 +612,8 @@ class BaseAlgorithm(ABC):
         :return: the model's action and the next hidden state
             (used in recurrent policies)
         """
-        return self.policy.predict(observation, state, episode_start, deterministic)
+        return self.policy.predict(observation, state, episode_start,
+                                   deterministic)
 
     def set_random_seed(self, seed: Optional[int] = None) -> None:
         """
@@ -582,7 +624,8 @@ class BaseAlgorithm(ABC):
         """
         if seed is None:
             return
-        set_random_seed(seed, using_cuda=self.device.type == th.device("cuda").type)
+        set_random_seed(seed,
+                        using_cuda=self.device.type == th.device("cuda").type)
         self.action_space.seed(seed)
         if self.env is not None:
             self.env.seed(seed)
@@ -590,10 +633,10 @@ class BaseAlgorithm(ABC):
             self.eval_env.seed(seed)
 
     def set_parameters(
-        self,
-        load_path_or_dict: Union[str, Dict[str, Dict]],
-        exact_match: bool = True,
-        device: Union[th.device, str] = "auto",
+            self,
+            load_path_or_dict: Union[str, Dict[str, Dict]],
+            exact_match: bool = True,
+            device: Union[th.device, str] = "auto",
     ) -> None:
         """
         Load parameters from a given zip-file or a nested dictionary containing parameters for
@@ -659,14 +702,14 @@ class BaseAlgorithm(ABC):
 
     @classmethod
     def load(
-        cls,
-        path: Union[str, pathlib.Path, io.BufferedIOBase],
-        env: Optional[GymEnv] = None,
-        device: Union[th.device, str] = "auto",
-        custom_objects: Optional[Dict[str, Any]] = None,
-        print_system_info: bool = False,
-        force_reset: bool = True,
-        **kwargs,
+            cls,
+            path: Union[str, pathlib.Path, io.BufferedIOBase],
+            env: Optional[GymEnv] = None,
+            device: Union[th.device, str] = "auto",
+            custom_objects: Optional[Dict[str, Any]] = None,
+            print_system_info: bool = False,
+            force_reset: bool = True,
+            **kwargs,
     ) -> "BaseAlgorithm":
         """
         Load the model from a zip-file.
@@ -697,7 +740,8 @@ class BaseAlgorithm(ABC):
             get_system_info()
 
         data, params, pytorch_variables = load_from_zip_file(
-            path, device=device, custom_objects=custom_objects, print_system_info=print_system_info
+            path, device=device, custom_objects=custom_objects,
+            print_system_info=print_system_info
         )
 
         # Remove stored device information and replace with ours
@@ -705,20 +749,23 @@ class BaseAlgorithm(ABC):
             if "device" in data["policy_kwargs"]:
                 del data["policy_kwargs"]["device"]
 
-        if "policy_kwargs" in kwargs and kwargs["policy_kwargs"] != data["policy_kwargs"]:
+        if "policy_kwargs" in kwargs and kwargs["policy_kwargs"] != data[
+            "policy_kwargs"]:
             raise ValueError(
                 f"The specified policy kwargs do not equal the stored policy kwargs."
                 f"Stored kwargs: {data['policy_kwargs']}, specified kwargs: {kwargs['policy_kwargs']}"
             )
 
         if "observation_space" not in data or "action_space" not in data:
-            raise KeyError("The observation_space and action_space were not given, can't verify new environments")
+            raise KeyError(
+                "The observation_space and action_space were not given, can't verify new environments")
 
         if env is not None:
             # Wrap first if needed
             env = cls._wrap_env(env, data["verbose"])
             # Check if given env is valid
-            check_for_correct_spaces(env, data["observation_space"], data["action_space"])
+            check_for_correct_spaces(env, data["observation_space"],
+                                     data["action_space"])
             # Discard `_last_obs`, this will force the env to reset before training
             # See issue https://github.com/DLR-RM/stable-baselines3/issues/597
             if force_reset and data is not None:
@@ -733,7 +780,8 @@ class BaseAlgorithm(ABC):
             policy=data["policy_class"],
             env=env,
             device=device,
-            _init_setup_model=False,  # pytype: disable=not-instantiable,wrong-keyword-args
+            _init_setup_model=False,
+            # pytype: disable=not-instantiable,wrong-keyword-args
         )
 
         # load parameters
@@ -756,7 +804,8 @@ class BaseAlgorithm(ABC):
                     continue
                 # Set the data attribute directly to avoid issue when using optimizers
                 # See https://github.com/DLR-RM/stable-baselines3/issues/391
-                recursive_setattr(model, name + ".data", pytorch_variables[name].data)
+                recursive_setattr(model, name + ".data",
+                                  pytorch_variables[name].data)
 
         # Sample gSDE exploration matrix, so it uses the right device
         # see issue #44
@@ -780,10 +829,10 @@ class BaseAlgorithm(ABC):
         return params
 
     def save(
-        self,
-        path: Union[str, pathlib.Path, io.BufferedIOBase],
-        exclude: Optional[Iterable[str]] = None,
-        include: Optional[Iterable[str]] = None,
+            self,
+            path: Union[str, pathlib.Path, io.BufferedIOBase],
+            exclude: Optional[Iterable[str]] = None,
+            include: Optional[Iterable[str]] = None,
     ) -> None:
         """
         Save all the attributes of the object and the model parameters in a zip-file.
@@ -827,4 +876,5 @@ class BaseAlgorithm(ABC):
         # Build dict of state_dicts
         params_to_save = self.get_parameters()
 
-        save_to_zip_file(path, data=data, params=params_to_save, pytorch_variables=pytorch_variables)
+        save_to_zip_file(path, data=data, params=params_to_save,
+                         pytorch_variables=pytorch_variables)

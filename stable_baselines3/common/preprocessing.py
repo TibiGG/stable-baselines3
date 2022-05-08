@@ -140,6 +140,10 @@ def get_obs_shape(
     :param observation_space:
     :return:
     """
+    if isinstance(observation_space, spaces.Tuple):
+        # Assumption: no Tuple-based observation which is not Multi-Agent
+        observation_space = observation_space.spaces[0]
+
     if isinstance(observation_space, spaces.Box):
         return observation_space.shape
     elif isinstance(observation_space, spaces.Discrete):
@@ -184,6 +188,10 @@ def get_action_dim(action_space: spaces.Space) -> int:
     :param action_space:
     :return:
     """
+    if isinstance(action_space, spaces.Tuple):
+        # Assumption: no Tuple-based observation which is not Multi-Agent
+        action_space = action_space.spaces[0]
+
     if isinstance(action_space, spaces.Box):
         return int(np.prod(action_space.shape))
     elif isinstance(action_space, spaces.Discrete):

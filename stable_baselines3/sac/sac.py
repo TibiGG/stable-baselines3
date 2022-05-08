@@ -108,6 +108,7 @@ class SAC(OffPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        is_marl: bool = False,
     ):
 
         super().__init__(
@@ -136,6 +137,7 @@ class SAC(OffPolicyAlgorithm):
             optimize_memory_usage=optimize_memory_usage,
             supported_action_spaces=(gym.spaces.Box),
             support_multi_env=True,
+            is_marl=is_marl,
         )
 
         self.target_entropy = target_entropy
@@ -155,7 +157,7 @@ class SAC(OffPolicyAlgorithm):
         # Target entropy is used when learning the entropy coefficient
         if self.target_entropy == "auto":
             # automatically set target entropy if needed
-            self.target_entropy = -np.prod(self.env.action_space.shape).astype(np.float32)
+            self.target_entropy = -np.prod(self.action_space.shape).astype(np.float32)
         else:
             # Force conversion
             # this will also throw an error for unexpected string

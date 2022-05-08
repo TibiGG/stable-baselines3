@@ -100,6 +100,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         use_sde_at_warmup: bool = False,
         sde_support: bool = True,
         supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
+        is_marl: bool = False,
     ):
 
         super().__init__(
@@ -117,6 +118,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             use_sde=use_sde,
             sde_sample_freq=sde_sample_freq,
             supported_action_spaces=supported_action_spaces,
+            is_marl=is_marl,
         )
         self.buffer_size = buffer_size
         self.batch_size = batch_size
@@ -193,6 +195,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
             self.replay_buffer = HerReplayBuffer(
                 self.env,
+                self.observation_space,
+                self.action_space,
                 self.buffer_size,
                 device=self.device,
                 replay_buffer=replay_buffer,

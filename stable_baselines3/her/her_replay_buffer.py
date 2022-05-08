@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch as th
+from gym import spaces
 
 from stable_baselines3.common.buffers import DictReplayBuffer
 from stable_baselines3.common.preprocessing import get_obs_shape
@@ -72,6 +73,8 @@ class HerReplayBuffer(DictReplayBuffer):
     def __init__(
         self,
         env: VecEnv,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
         buffer_size: int,
         device: Union[th.device, str] = "cpu",
         replay_buffer: Optional[DictReplayBuffer] = None,
@@ -80,9 +83,10 @@ class HerReplayBuffer(DictReplayBuffer):
         goal_selection_strategy: Union[GoalSelectionStrategy, str] = "future",
         online_sampling: bool = True,
         handle_timeout_termination: bool = True,
+        is_marl: bool = False,
     ):
 
-        super().__init__(buffer_size, env.observation_space, env.action_space, device, env.num_envs)
+        super().__init__(buffer_size, observation_space, action_space, device, env.num_envs)
 
         # convert goal_selection_strategy into GoalSelectionStrategy if string
         if isinstance(goal_selection_strategy, str):
@@ -126,8 +130,8 @@ class HerReplayBuffer(DictReplayBuffer):
         self.episode_steps = 0
 
         # Get shape of observation and goal (usually the same)
-        self.obs_shape = get_obs_shape(self.env.observation_space.spaces["observation"])
-        self.goal_shape = get_obs_shape(self.env.observation_space.spaces["achieved_goal"])
+        self.obs_shape = get_obs_shape(observation_space.spaces["observation"])
+        self.goal_shape = get_obs_shape(observation_space.spaces["achieved_goal"])
 
         # input dimensions for buffer initialization
         input_shape = {
