@@ -1,6 +1,6 @@
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, Generator, List, Optional, Union, Tuple
 
 import numpy as np
 import torch as th
@@ -9,6 +9,7 @@ from gym import spaces
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
 from stable_baselines3.common.type_aliases import (
     DictReplayBufferSamples,
+    MultiAgentReplayBufferSamples,
     DictRolloutBufferSamples,
     ReplayBufferSamples,
     RolloutBufferSamples,
@@ -628,6 +629,162 @@ class DictReplayBuffer(ReplayBuffer):
                 -1, 1
             ),
             rewards=self.to_torch(self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env)),
+        )
+
+
+class MultiAgentReplayBuffer(ReplayBuffer):
+    """
+    Tuple Replay buffer used in multi-agent off-policy algorithms like SAC/TD3.
+    Extends the ReplayBuffer to use tuples of observations
+
+    :param buffer_size: Max number of element in the buffer
+    :param observation_space: Observation space
+    :param action_space: Action space
+    :param device:
+    :param n_envs: Number of parallel environments
+    :param optimize_memory_usage: Enable a memory efficient variant
+        Disabled for now (see https://github.com/DLR-RM/stable-baselines3/pull/243#discussion_r531535702)
+    :param handle_timeout_termination: Handle timeout termination (due to timelimit)
+        separately and treat the task as infinite horizon task.
+        https://github.com/DLR-RM/stable-baselines3/issues/284
+    """
+    def __init__(
+            self,
+            buffer_size: int,
+            observation_space: spaces.Space,
+            action_space: spaces.Space,
+            device: Union[th.device, str] = "cpu",
+            n_envs: int = 1,
+            optimize_memory_usage: bool = False,
+            handle_timeout_termination: bool = True,
+    ):
+        assert isinstance(observation_space, spaces.Tuple), "MultiAgentReplayBuffer must be used with Tuple obs space only"
+        super(ReplayBuffer, self).__init__(buffer_size, observation_space.spaces[0], action_space.spaces[0], device, n_envs=n_envs)
+
+        self.buffer_size = max(buffer_size // n_envs, 1)
+        self.n_agents = len(observation_space.spaces)
+
+        # Check that the replay buffer can fit into the memory
+        if psutil is not None:
+            mem_available = psutil.virtual_memory().available
+
+        assert optimize_memory_usage is False, "MultiAgentReplayBuffer does not support optimize_memory_usage"
+        # disabling as this adds quite a bit of complexity
+        # https://github.com/DLR-RM/stable-baselines3/pull/243#discussion_r531535702
+        self.optimize_memory_usage = optimize_memory_usage
+
+        # TODO: consider reordering matrix for more optimised storage
+        #       i.e. [key][n_pos][i_agent] instead of [i_agent][key][n_pos],
+        #            maybe even [key][n_pos]
+        #       Replace logic when/if considering different obs/action spaces for each agent
+        self.observations = tuple({
+            key: np.zeros((self.buffer_size, self.n_envs) + _obs_shape, dtype=observation_space.spaces[0][key].dtype)
+            for key, _obs_shape in self.obs_shape.items()
+        } for _ in range(self.n_agents))
+        self.next_observations = tuple({
+            key: np.zeros((self.buffer_size, self.n_envs) + _obs_shape, dtype=observation_space.spaces[0][key].dtype)
+            for key, _obs_shape in self.obs_shape.items()
+        } for _ in range(self.n_agents))
+
+        self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim, self.n_agents), dtype=action_space.spaces[0].dtype)
+        self.rewards = np.zeros((self.buffer_size, self.n_envs, self.n_agents), dtype=np.float32)
+        self.dones = np.zeros((self.buffer_size, self.n_envs, self.n_agents), dtype=np.float32)
+
+        # Handle timeouts termination properly if needed
+        # see https://github.com/DLR-RM/stable-baselines3/issues/284
+        self.handle_timeout_termination = handle_timeout_termination
+        self.timeouts = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+
+        if psutil is not None:
+            obs_nbytes = 0
+            for _, obs in self.observations[0].items():
+                obs_nbytes += obs.nbytes
+            obs_nbytes *= self.n_agents
+
+            total_memory_usage = obs_nbytes + self.actions.nbytes + self.rewards.nbytes + self.dones.nbytes
+            if self.next_observations is not None:
+                next_obs_nbytes = 0
+                for _, obs in self.observations[0].items():
+                    next_obs_nbytes += obs.nbytes
+                total_memory_usage += next_obs_nbytes
+
+            if total_memory_usage > mem_available:
+                # Convert to GB
+                total_memory_usage /= 1e9
+                mem_available /= 1e9
+                warnings.warn(
+                    "This system does not have apparently enough memory to store the complete "
+                    f"replay buffer {total_memory_usage:.2f}GB > {mem_available:.2f}GB"
+                )
+
+    def add(
+            self,
+            obs: Tuple[Dict[str, np.ndarray]],
+            next_obs: Tuple[Dict[str, np.ndarray]],
+            action: np.ndarray,
+            reward: np.ndarray,
+            done: np.ndarray,
+            infos: List[Dict[str, Any]],
+    ) -> None:
+        # Copy to avoid modification by reference
+        for i_agent in range(self.n_agents):
+            for key in self.observations[i_agent].keys():
+                # Reshape needed when using multiple envs with discrete observations
+                # as numpy cannot broadcast (n_discrete,) to (n_discrete, 1)
+                if isinstance(self.observation_space[key], spaces.Discrete):
+                    obs[i_agent][key] = obs[i_agent][key].reshape((self.n_envs,) + self.obs_shape[key])
+                self.observations[i_agent][key][self.pos] = np.array(obs[i_agent][key]).copy()
+
+            for key in self.next_observations[i_agent].keys():
+                if isinstance(self.observation_space[key], spaces.Discrete):
+                    next_obs[i_agent][key] = next_obs[i_agent][key].reshape((self.n_envs,) + self.obs_shape[key])
+                self.next_observations[i_agent][key][self.pos] = np.array(next_obs[i_agent][key]).copy()
+
+        # Same reshape, for actions
+        if isinstance(self.action_space, spaces.Discrete):
+            action = action.reshape((self.n_envs, self.action_dim, self.n_agents))
+
+        self.actions[self.pos] = np.array(action).copy()
+        self.rewards[self.pos] = np.array(reward).copy()
+        self.dones[self.pos] = np.array(done).copy()
+
+        if self.handle_timeout_termination:
+            self.timeouts[self.pos] = np.array([info.get("TimeLimit.truncated", False) for info in infos])
+
+        self.pos += 1
+        if self.pos == self.buffer_size:
+            self.full = True
+            self.pos = 0
+
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> MultiAgentReplayBufferSamples:
+        # Sample randomly the env idx
+        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+
+        # Normalize if needed and remove extra dimension (we are using only one env for now)
+        obs_ = tuple(self._normalize_obs(
+        {key: obs[batch_inds, env_indices, :] for key, obs in self.observations[i_agent].items()}, env)
+        for i_agent in range(self.n_agents))
+
+        next_obs_ = tuple(self._normalize_obs(
+            {key: obs[batch_inds, env_indices, :] for key, obs in self.next_observations[i_agent].items()}, env
+        ) for i_agent in range(self.n_agents))
+
+        # Convert to torch tensor
+        observations = tuple({key: self.to_torch(obs) for key, obs in obs_[i_agent].items()}
+                             for i_agent in range(self.n_agents))
+        next_observations = tuple({key: self.to_torch(obs) for key, obs in next_obs_[i_agent].items()}
+                                  for i_agent in range(self.n_agents))
+
+        return MultiAgentReplayBufferSamples(
+            observations=observations,
+            actions=self.to_torch(self.actions[batch_inds, env_indices]),
+            next_observations=next_observations,
+            # Only use dones that are not due to timeouts
+            # deactivated by default (timeouts is initialized as an array of False)
+            dones=self.to_torch(self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices]))
+                .reshape(-1, 1, self.n_agents),
+            rewards=self.to_torch(self._normalize_reward(self.rewards[batch_inds, env_indices]
+                                                         .reshape(-1, 1, self.n_agents), env)),
         )
 
 

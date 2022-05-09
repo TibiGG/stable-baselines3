@@ -4,7 +4,7 @@ import pytest
 import torch as th
 from gym import spaces
 
-from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer
+from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer, MultiAgentReplayBuffer
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.type_aliases import DictReplayBufferSamples, ReplayBufferSamples
 from stable_baselines3.common.vec_env import VecNormalize
@@ -65,9 +65,47 @@ class DummyDictEnv(gym.Env):
         return obs, reward, done, {}
 
 
-@pytest.mark.parametrize("replay_buffer_cls", [ReplayBuffer, DictReplayBuffer])
+class DummyMultiAgentDictEnv(gym.Env):
+    """
+    Custom gym environment for testing purposes
+    """
+
+    def __init__(self):
+        self._n_agents = 2
+        self.action_space = spaces.Tuple(tuple(spaces.Box(1, 5, (1,))
+                                         for _ in range(self._n_agents)))
+        space = spaces.Box(1, 5, (1,))
+        self.observation_space = spaces.Tuple(tuple(spaces.Dict({"observation": space, "achieved_goal": space, "desired_goal": space})
+                                              for _ in range(self._n_agents)))
+        self._observations = [1, 2, 3, 4, 5]
+        self._rewards = [1, 2, 3, 4, 5]
+        self._t = 0
+        self._ep_length = 100
+
+    def reset(self):
+        self._t = 0
+        obs = tuple({key: self._observations[0]
+                     for key in self.observation_space.spaces.keys()}
+                    for _ in range(self._n_agents))
+        return obs
+
+    def step(self, action):
+        self._t += 1
+        index = self._t % len(self._observations)
+        obs = tuple({key: self._observations[index]
+                     for key in self.observation_space.spaces.keys()}
+                    for _ in range(self._n_agents))
+        done = self._t >= self._ep_length
+        reward = self._rewards[index]
+        return obs, reward, done, {}
+
+@pytest.mark.parametrize("replay_buffer_cls", [ReplayBuffer, DictReplayBuffer, MultiAgentReplayBuffer])
 def test_replay_buffer_normalization(replay_buffer_cls):
-    env = {ReplayBuffer: DummyEnv, DictReplayBuffer: DummyDictEnv}[replay_buffer_cls]
+    env = {
+        ReplayBuffer: DummyEnv,
+        DictReplayBuffer: DummyDictEnv,
+        MultiAgentReplayBuffer: DummyMultiAgentDictEnv
+       }[replay_buffer_cls]
     env = make_vec_env(env)
     env = VecNormalize(env)
 

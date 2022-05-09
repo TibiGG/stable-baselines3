@@ -48,7 +48,16 @@ class VecNormalize(VecEnvWrapper):
         if self.norm_obs:
             self._sanity_checks()
 
-            if isinstance(self.observation_space, gym.spaces.Dict):
+            if isinstance(self.observation_space, gym.spaces.Tuple):
+                self.obs_spaces = self.observation_space.spaces
+                if isinstance(self.observation_space[0], gym.spaces.Dict):
+                    self.obs_rms = tuple({key: RunningMeanStd(shape=self.obs_spaces[i][key].shape)
+                                          for key in self.norm_obs_keys}
+                                         for i in range(len(self.obs_spaces)))
+                else:
+                    self.obs_rms = tuple(RunningMeanStd(shape=self.obs_spaces[i].shape)
+                                         for i in range(len(self.obs_spaces)))
+            elif isinstance(self.observation_space, gym.spaces.Dict):
                 self.obs_spaces = self.observation_space.spaces
                 self.obs_rms = {key: RunningMeanStd(shape=self.obs_spaces[key].shape) for key in self.norm_obs_keys}
             else:
@@ -72,6 +81,19 @@ class VecNormalize(VecEnvWrapper):
         """
         Check the observations that are going to be normalized are of the correct type (spaces.Box).
         """
+        if isinstance(self.observation_space, gym.spaces.Tuple):
+            # By default, we normalize all keys
+            if self.norm_obs_keys is None:
+                self.norm_obs_keys = list(self.observation_space.spaces[0].spaces.keys())
+            # Check that all keys are of type Box
+            for obs_key in self.norm_obs_keys:
+                if not isinstance(self.observation_space.spaces[0].spaces[obs_key], gym.spaces.Box):
+                    raise ValueError(
+                        f"VecNormalize only supports `gym.spaces.Box` observation spaces but {obs_key} "
+                        f"is of type {self.observation_space.spaces[obs_key]}. "
+                        "You should probably explicitely pass the observation keys "
+                        " that should be normalized via the `norm_obs_keys` parameter."
+                    )
         if isinstance(self.observation_space, gym.spaces.Dict):
             # By default, we normalize all keys
             if self.norm_obs_keys is None:
