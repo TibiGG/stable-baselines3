@@ -7,7 +7,7 @@ from gym import spaces
 from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer, MultiAgentReplayBuffer
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.type_aliases import DictReplayBufferSamples, ReplayBufferSamples
-from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.common.vec_env import VecNormalize, MultiagentVecEnv
 
 
 class DummyEnv(gym.Env):
@@ -85,16 +85,16 @@ class DummyMultiAgentDictEnv(gym.Env):
     def reset(self):
         self._t = 0
         obs = tuple({key: self._observations[0]
-                     for key in self.observation_space.spaces.keys()}
-                    for _ in range(self._n_agents))
+                     for key in self.observation_space.spaces[i_agent].keys()}
+                    for i_agent in range(self._n_agents))
         return obs
 
     def step(self, action):
         self._t += 1
         index = self._t % len(self._observations)
         obs = tuple({key: self._observations[index]
-                     for key in self.observation_space.spaces.keys()}
-                    for _ in range(self._n_agents))
+                     for key in self.observation_space.spaces[i_agent].keys()}
+                    for i_agent in range(self._n_agents))
         done = self._t >= self._ep_length
         reward = self._rewards[index]
         return obs, reward, done, {}
@@ -106,7 +106,11 @@ def test_replay_buffer_normalization(replay_buffer_cls):
         DictReplayBuffer: DummyDictEnv,
         MultiAgentReplayBuffer: DummyMultiAgentDictEnv
        }[replay_buffer_cls]
-    env = make_vec_env(env)
+    if env == DummyMultiAgentDictEnv:
+        env = make_vec_env(env, vec_env_cls=MultiagentVecEnv)
+    else:
+        env = make_vec_env(env)
+
     env = VecNormalize(env)
 
     buffer = replay_buffer_cls(100, env.observation_space, env.action_space)

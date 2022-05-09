@@ -25,12 +25,15 @@ class MultiagentVecEnv(VecEnv):
         self.envs = [fn() for fn in env_fns]
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
-        obs_space = env.observation_space
-        self.keys, shapes, dtypes = obs_space_info(obs_space, is_marl=True)
+        obs_space = env.observation_space.spaces[0]
+        self.keys, shapes, dtypes = obs_space_info(obs_space)
+        self.n_agents = len(env.observation_space.spaces)
 
-        self.buf_obs = OrderedDict([(k, np.zeros((self.num_envs,) + tuple(shapes[k]), dtype=dtypes[k])) for k in self.keys])
-        self.buf_dones = np.zeros((self.num_envs,), dtype=bool)
-        self.buf_rews = np.zeros((self.num_envs,), dtype=np.float32)
+        self.buf_obs = tuple(OrderedDict([(k, np.zeros((self.num_envs, ) + tuple(shapes[k]), dtype=dtypes[k]))
+                                    for k in self.keys])
+                             for _ in range(self.n_agents))
+        self.buf_dones = np.zeros((self.num_envs, self.n_agents), dtype=bool)
+        self.buf_rews = np.zeros((self.num_envs, self.n_agents), dtype=np.float32)
         self.buf_infos = [{} for _ in range(self.num_envs)]
         self.actions = None
         self.metadata = env.metadata
@@ -40,15 +43,17 @@ class MultiagentVecEnv(VecEnv):
 
     def step_wait(self) -> VecEnvStepReturn:
         for env_idx in range(self.num_envs):
-            obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] = self.envs[env_idx].step(
-                self.actions[env_idx]
-            )
-            if self.buf_dones[env_idx]:
+            obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] \
+                = self.envs[env_idx].step(self.actions[env_idx])
+            if all(self.buf_dones[env_idx]):
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]["terminal_observation"] = obs
                 obs = self.envs[env_idx].reset()
             self._save_obs(env_idx, obs)
-        return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones), deepcopy(self.buf_infos))
+        return (self._obs_from_buf(),
+                np.copy(self.buf_rews),
+                np.copy(self.buf_dones),
+                deepcopy(self.buf_infos))
 
     def seed(self, seed: Optional[int] = None) -> List[Union[None, int]]:
         if seed is None:
@@ -90,13 +95,15 @@ class MultiagentVecEnv(VecEnv):
 
     def _save_obs(self, env_idx: int, obs: VecEnvObs) -> None:
         for key in self.keys:
-            if key is None:
-                self.buf_obs[key][env_idx] = obs
-            else:
-                self.buf_obs[key][env_idx] = obs[key]
+            for i_ob, ob in enumerate(obs):
+                if key is None:
+                    self.buf_obs[i_ob][key][env_idx] = ob
+                else:
+                    self.buf_obs[i_ob][key][env_idx] = ob[key]
 
     def _obs_from_buf(self) -> VecEnvObs:
-        return dict_to_obs(self.observation_space, copy_obs_dict(self.buf_obs))
+        return tuple(dict_to_obs(self.observation_space.spaces[0], copy_obs_dict(obs))
+                     for obs in self.buf_obs)
 
     def get_attr(self, attr_name: str, indices: VecEnvIndices = None) -> List[Any]:
         """Return attribute from vectorized environment (see base class)."""

@@ -50,13 +50,14 @@ class VecNormalize(VecEnvWrapper):
 
             if isinstance(self.observation_space, gym.spaces.Tuple):
                 self.obs_spaces = self.observation_space.spaces
+                self.n_agents = len(self.obs_spaces)
                 if isinstance(self.observation_space[0], gym.spaces.Dict):
                     self.obs_rms = tuple({key: RunningMeanStd(shape=self.obs_spaces[i][key].shape)
                                           for key in self.norm_obs_keys}
-                                         for i in range(len(self.obs_spaces)))
+                                         for i in range(self.n_agents))
                 else:
                     self.obs_rms = tuple(RunningMeanStd(shape=self.obs_spaces[i].shape)
-                                         for i in range(len(self.obs_spaces)))
+                                         for i in range(self.n_agents))
             elif isinstance(self.observation_space, gym.spaces.Dict):
                 self.obs_spaces = self.observation_space.spaces
                 self.obs_rms = {key: RunningMeanStd(shape=self.obs_spaces[key].shape) for key in self.norm_obs_keys}
@@ -68,7 +69,10 @@ class VecNormalize(VecEnvWrapper):
         self.clip_obs = clip_obs
         self.clip_reward = clip_reward
         # Returns: discounted rewards
-        self.returns = np.zeros(self.num_envs)
+        if isinstance(self.observation_space, gym.spaces.Tuple):
+            self.returns = np.zeros((self.num_envs, self.n_agents))
+        else:
+            self.returns = np.zeros(self.num_envs)
         self.gamma = gamma
         self.epsilon = epsilon
         self.training = training
@@ -94,7 +98,7 @@ class VecNormalize(VecEnvWrapper):
                         "You should probably explicitely pass the observation keys "
                         " that should be normalized via the `norm_obs_keys` parameter."
                     )
-        if isinstance(self.observation_space, gym.spaces.Dict):
+        elif isinstance(self.observation_space, gym.spaces.Dict):
             # By default, we normalize all keys
             if self.norm_obs_keys is None:
                 self.norm_obs_keys = list(self.observation_space.spaces.keys())
@@ -159,7 +163,7 @@ class VecNormalize(VecEnvWrapper):
 
         # Check only that the observation_space match
         utils.check_for_correct_spaces(venv, self.observation_space, venv.action_space)
-        self.returns = np.zeros(self.num_envs)
+        self.returns = np.zeros(self.returns.shape)
 
     def step_wait(self) -> VecEnvStepReturn:
         """
@@ -173,11 +177,7 @@ class VecNormalize(VecEnvWrapper):
         self.old_reward = rewards
 
         if self.training and self.norm_obs:
-            if isinstance(obs, dict) and isinstance(self.obs_rms, dict):
-                for key in self.obs_rms.keys():
-                    self.obs_rms[key].update(obs[key])
-            else:
-                self.obs_rms.update(obs)
+            self._update_obs_rms(obs)
 
         obs = self.normalize_obs(obs)
 
@@ -187,7 +187,10 @@ class VecNormalize(VecEnvWrapper):
 
         # Normalize the terminal observations
         for idx, done in enumerate(dones):
-            if not done:
+            if isinstance(done, np.ndarray):
+                if not all(done):
+                    continue
+            elif not done:
                 continue
             if "terminal_observation" in infos[idx]:
                 infos[idx]["terminal_observation"] = self.normalize_obs(infos[idx]["terminal_observation"])
@@ -226,7 +229,13 @@ class VecNormalize(VecEnvWrapper):
         # Avoid modifying by reference the original object
         obs_ = deepcopy(obs)
         if self.norm_obs:
-            if isinstance(obs, dict) and isinstance(self.obs_rms, dict):
+            if isinstance(obs, tuple) and isinstance(self.obs_rms, tuple):
+                # Only normalize the specified keys
+                # TODO: assuming nested Tuple[Dict]
+                for i_ob, (ob, ob_rms) in enumerate(zip(obs, self.obs_rms)):
+                    for key in self.norm_obs_keys:
+                        obs_[i_ob][key] = self._normalize_obs(ob[key], ob_rms[key]).astype(np.float32)
+            elif isinstance(obs, dict) and isinstance(self.obs_rms, dict):
                 # Only normalize the specified keys
                 for key in self.norm_obs_keys:
                     obs_[key] = self._normalize_obs(obs[key], self.obs_rms[key]).astype(np.float32)
@@ -281,12 +290,20 @@ class VecNormalize(VecEnvWrapper):
         self.old_obs = obs
         self.returns = np.zeros(self.num_envs)
         if self.training and self.norm_obs:
-            if isinstance(obs, dict) and isinstance(self.obs_rms, dict):
-                for key in self.obs_rms.keys():
-                    self.obs_rms[key].update(obs[key])
-            else:
-                self.obs_rms.update(obs)
+            self._update_obs_rms(obs)
         return self.normalize_obs(obs)
+
+    def _update_obs_rms(self, obs):
+        if isinstance(obs, tuple) and isinstance(self.obs_rms, tuple):
+            for i_ob, ob in enumerate(obs):
+                # TODO: assuming Tuple[Dict] for multi-agent
+                for key in self.obs_rms[i_ob].keys():
+                    self.obs_rms[i_ob][key].update(ob[key])
+        elif isinstance(obs, dict) and isinstance(self.obs_rms, dict):
+            for key in self.obs_rms.keys():
+                self.obs_rms[key].update(obs[key])
+        else:
+            self.obs_rms.update(obs)
 
     @staticmethod
     def load(load_path: str, venv: VecEnv) -> "VecNormalize":

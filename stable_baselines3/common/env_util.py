@@ -5,7 +5,7 @@ import gym
 
 from stable_baselines3.common.atari_wrappers import AtariWrapper
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, MultiagentVecEnv, VecEnv
 
 
 def unwrap_wrapper(env: gym.Env, wrapper_class: Type[gym.Wrapper]) -> Optional[gym.Wrapper]:
@@ -43,7 +43,7 @@ def make_vec_env(
     monitor_dir: Optional[str] = None,
     wrapper_class: Optional[Callable[[gym.Env], gym.Env]] = None,
     env_kwargs: Optional[Dict[str, Any]] = None,
-    vec_env_cls: Optional[Type[Union[DummyVecEnv, SubprocVecEnv]]] = None,
+    vec_env_cls: Optional[Type[Union[DummyVecEnv, SubprocVecEnv, MultiagentVecEnv]]] = None,
     vec_env_kwargs: Optional[Dict[str, Any]] = None,
     monitor_kwargs: Optional[Dict[str, Any]] = None,
     wrapper_kwargs: Optional[Dict[str, Any]] = None,
