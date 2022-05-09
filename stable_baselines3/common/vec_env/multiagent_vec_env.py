@@ -32,7 +32,7 @@ class MultiagentVecEnv(VecEnv):
         self.buf_obs = tuple(OrderedDict([(k, np.zeros((self.num_envs, ) + tuple(shapes[k]), dtype=dtypes[k]))
                                     for k in self.keys])
                              for _ in range(self.n_agents))
-        self.buf_dones = np.zeros((self.num_envs, self.n_agents), dtype=bool)
+        self.buf_dones = np.zeros((self.num_envs, ), dtype=bool)
         self.buf_rews = np.zeros((self.num_envs, self.n_agents), dtype=np.float32)
         self.buf_infos = [{} for _ in range(self.num_envs)]
         self.actions = None
@@ -45,7 +45,7 @@ class MultiagentVecEnv(VecEnv):
         for env_idx in range(self.num_envs):
             obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] \
                 = self.envs[env_idx].step(self.actions[env_idx])
-            if all(self.buf_dones[env_idx]):
+            if self.buf_dones[env_idx]:
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]["terminal_observation"] = obs
                 obs = self.envs[env_idx].reset()

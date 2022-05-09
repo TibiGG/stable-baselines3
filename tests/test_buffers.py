@@ -6,7 +6,7 @@ from gym import spaces
 
 from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer, MultiAgentReplayBuffer
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.type_aliases import DictReplayBufferSamples, ReplayBufferSamples
+from stable_baselines3.common.type_aliases import MultiAgentReplayBufferSamples, DictReplayBufferSamples, ReplayBufferSamples
 from stable_baselines3.common.vec_env import VecNormalize, MultiagentVecEnv
 
 
@@ -95,7 +95,9 @@ class DummyMultiAgentDictEnv(gym.Env):
         obs = tuple({key: self._observations[index]
                      for key in self.observation_space.spaces[i_agent].keys()}
                     for i_agent in range(self._n_agents))
+        # TODO: turn done & reward into tuple versions, after modifying parking env
         done = self._t >= self._ep_length
+        # reward = tuple(self._rewards[index] for _ in range(self._n_agents))
         reward = self._rewards[index]
         return obs, reward, done, {}
 
@@ -129,7 +131,11 @@ def test_replay_buffer_normalization(replay_buffer_cls):
     sample = buffer.sample(50, env)
     # Test observation normalization
     for observations in [sample.observations, sample.next_observations]:
-        if isinstance(sample, DictReplayBufferSamples):
+        if isinstance(sample, MultiAgentReplayBufferSamples):
+            for obs in observations:
+                for key in obs.keys():
+                    assert th.allclose(obs[key].mean(0), th.zeros(1), atol=1)
+        elif isinstance(sample, DictReplayBufferSamples):
             for key in observations.keys():
                 assert th.allclose(observations[key].mean(0), th.zeros(1), atol=1)
         elif isinstance(sample, ReplayBufferSamples):

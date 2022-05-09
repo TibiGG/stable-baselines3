@@ -187,10 +187,7 @@ class VecNormalize(VecEnvWrapper):
 
         # Normalize the terminal observations
         for idx, done in enumerate(dones):
-            if isinstance(done, np.ndarray):
-                if not all(done):
-                    continue
-            elif not done:
+            if not done:
                 continue
             if "terminal_observation" in infos[idx]:
                 infos[idx]["terminal_observation"] = self.normalize_obs(infos[idx]["terminal_observation"])

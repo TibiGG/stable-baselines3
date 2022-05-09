@@ -137,7 +137,7 @@ class BaseBuffer(ABC):
 
     @staticmethod
     def _normalize_obs(
-        obs: Union[np.ndarray, Dict[str, np.ndarray]],
+        obs: Union[np.ndarray, Dict[str, np.ndarray], Tuple[Dict[str, np.ndarray]]],
         env: Optional[VecNormalize] = None,
     ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
         if env is not None:
@@ -686,9 +686,9 @@ class MultiAgentReplayBuffer(ReplayBuffer):
             for key, _obs_shape in self.obs_shape.items()
         } for _ in range(self.n_agents))
 
-        self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim, self.n_agents), dtype=action_space.spaces[0].dtype)
+        self.actions = np.zeros((self.buffer_size, self.n_envs, self.n_agents, self.action_dim), dtype=action_space.spaces[0].dtype)
         self.rewards = np.zeros((self.buffer_size, self.n_envs, self.n_agents), dtype=np.float32)
-        self.dones = np.zeros((self.buffer_size, self.n_envs, self.n_agents), dtype=np.float32)
+        self.dones = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
 
         # Handle timeouts termination properly if needed
         # see https://github.com/DLR-RM/stable-baselines3/issues/284
@@ -761,13 +761,15 @@ class MultiAgentReplayBuffer(ReplayBuffer):
         env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
 
         # Normalize if needed and remove extra dimension (we are using only one env for now)
-        obs_ = tuple(self._normalize_obs(
-        {key: obs[batch_inds, env_indices, :] for key, obs in self.observations[i_agent].items()}, env)
-        for i_agent in range(self.n_agents))
+        obs_ = self._normalize_obs(tuple(
+            {key: obs[batch_inds, env_indices, :]
+             for key, obs in self.observations[i_agent].items()}
+            for i_agent in range(self.n_agents)), env)
 
-        next_obs_ = tuple(self._normalize_obs(
-            {key: obs[batch_inds, env_indices, :] for key, obs in self.next_observations[i_agent].items()}, env
-        ) for i_agent in range(self.n_agents))
+        next_obs_ = self._normalize_obs(tuple(
+            {key: obs[batch_inds, env_indices, :]
+             for key, obs in self.next_observations[i_agent].items()}
+            for i_agent in range(self.n_agents)), env)
 
         # Convert to torch tensor
         observations = tuple({key: self.to_torch(obs) for key, obs in obs_[i_agent].items()}
@@ -781,10 +783,11 @@ class MultiAgentReplayBuffer(ReplayBuffer):
             next_observations=next_observations,
             # Only use dones that are not due to timeouts
             # deactivated by default (timeouts is initialized as an array of False)
-            dones=self.to_torch(self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices]))
-                .reshape(-1, 1, self.n_agents),
+            dones=self.to_torch(self.dones[batch_inds, env_indices]
+                                * (1 - self.timeouts[batch_inds, env_indices]).reshape(-1, 1))
+                .reshape(-1, 1),
             rewards=self.to_torch(self._normalize_reward(self.rewards[batch_inds, env_indices]
-                                                         .reshape(-1, 1, self.n_agents), env)),
+                                                         .reshape(-1, self.n_agents), env)),
         )
 
 
