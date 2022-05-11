@@ -355,6 +355,36 @@ def is_vectorized_dict_observation(observation: np.ndarray, observation_space: g
         )
 
 
+def is_vectorized_tuple_dict_observation(observation: np.ndarray, observation_space: gym.spaces.Tuple) -> bool:
+    """
+    For tuples of dict observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+
+    error_msg = ""
+    try:
+        all_vectorized = True
+        for i, (obs, subspace) in enumerate(zip(observation, observation_space.spaces)):
+            all_vectorized = all_vectorized and is_vectorized_observation(obs, subspace)
+            if not all_vectorized:
+                break;
+
+        return all_vectorized
+    except ValueError as e:
+        error_msg = f"{e}"
+    raise ValueError(
+        f"There seems to be a mix of vectorized and non-vectorized observations"
+        f"in the tuple. "
+        f"Unexpected observation shape {obs} for agent {i} "
+        f"of subspace {subspace}. {error_msg}"
+    )
+
+
+
 def is_vectorized_observation(observation: Union[int, np.ndarray], observation_space: gym.spaces.Space) -> bool:
     """
     For every observation type, detects and validates the shape,
@@ -371,6 +401,7 @@ def is_vectorized_observation(observation: Union[int, np.ndarray], observation_s
         gym.spaces.MultiDiscrete: is_vectorized_multidiscrete_observation,
         gym.spaces.MultiBinary: is_vectorized_multibinary_observation,
         gym.spaces.Dict: is_vectorized_dict_observation,
+        gym.spaces.Tuple: is_vectorized_tuple_dict_observation,
     }
 
     for space_type, is_vec_obs_func in is_vec_obs_func_dict.items():
@@ -447,7 +478,11 @@ def obs_as_tensor(
     :param device: PyTorch device
     :return: PyTorch tensor of the observation on a desired device.
     """
-    if isinstance(obs, np.ndarray):
+    if isinstance(obs, tuple):
+        return tuple({key: th.as_tensor(__obs).to(device)
+                      for (key, __obs) in _obs.items()}
+                     for _obs in obs)
+    elif isinstance(obs, np.ndarray):
         return th.as_tensor(obs).to(device)
     elif isinstance(obs, dict):
         return {key: th.as_tensor(_obs).to(device) for (key, _obs) in obs.items()}

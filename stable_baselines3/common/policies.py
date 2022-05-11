@@ -95,6 +95,8 @@ class BaseModel(nn.Module, ABC):
         self,
         net_kwargs: Dict[str, Any],
         features_extractor: Optional[BaseFeaturesExtractor] = None,
+        features_extractor_class=None,
+        features_extractor_kwargs=None
     ) -> Dict[str, Any]:
         """
         Update the network keyword arguments and create a new features extractor object if needed.
@@ -109,13 +111,26 @@ class BaseModel(nn.Module, ABC):
         net_kwargs = net_kwargs.copy()
         if features_extractor is None:
             # The features extractor is not shared, create a new one
-            features_extractor = self.make_features_extractor()
+            features_extractor = self.make_features_extractor(
+                net_kwargs["observation_space"],
+                features_extractor_class=features_extractor_class,
+                features_extractor_kwargs=features_extractor_kwargs)
         net_kwargs.update(dict(features_extractor=features_extractor, features_dim=features_extractor.features_dim))
         return net_kwargs
 
-    def make_features_extractor(self) -> BaseFeaturesExtractor:
+    def make_features_extractor(self,
+                                observation_space=None,
+                                features_extractor_class=None,
+                                features_extractor_kwargs=None)\
+            -> BaseFeaturesExtractor:
         """Helper method to create a features extractor."""
-        return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+        if observation_space is None:
+            observation_space = self.observation_space
+        if features_extractor_class is None:
+            features_extractor_class = self.features_extractor_class
+        if features_extractor_kwargs is None:
+            features_extractor_kwargs = self.features_extractor_kwargs
+        return features_extractor_class(observation_space, **features_extractor_kwargs)
 
     def extract_features(self, obs: th.Tensor) -> th.Tensor:
         """
@@ -224,7 +239,25 @@ class BaseModel(nn.Module, ABC):
             and whether the observation is vectorized or not
         """
         vectorized_env = False
-        if isinstance(observation, dict):
+        if isinstance(observation, tuple):
+            observation_ = []
+            for i, obs in enumerate(observation):
+                obs = copy.deepcopy(obs)
+                for key, subobs in obs.items():
+                    obs_space = self.observation_space.spaces[i].spaces[key]
+                    if is_image_space(obs_space):
+                        subobs_ = maybe_transpose(subobs, obs_space)
+                    else:
+                        subobs_ = np.array(subobs)
+                    vectorized_env = vectorized_env or is_vectorized_observation(
+                        subobs_, obs_space)
+                    # Add batch dimension if needed
+                    obs[key] = subobs_.reshape(
+                        (-1,) + self.observation_space.spaces[i].spaces[key].shape)
+                observation_.append(obs)
+            observation = tuple(observation_)
+
+        elif isinstance(observation, dict):
             # need to copy the dict as the dict in VecFrameStack will become a torch tensor
             observation = copy.deepcopy(observation)
             for key, obs in observation.items():
@@ -236,16 +269,14 @@ class BaseModel(nn.Module, ABC):
                 vectorized_env = vectorized_env or is_vectorized_observation(obs_, obs_space)
                 # Add batch dimension if needed
                 observation[key] = obs_.reshape((-1,) + self.observation_space[key].shape)
-
         elif is_image_space(self.observation_space):
             # Handle the different cases for images
             # as PyTorch use channel first format
             observation = maybe_transpose(observation, self.observation_space)
-
         else:
             observation = np.array(observation)
 
-        if not isinstance(observation, dict):
+        if not isinstance(observation, dict) and not isinstance(observation, tuple):
             # Dict obs need to be handled separately
             vectorized_env = is_vectorized_observation(observation, self.observation_space)
             # Add batch dimension if needed
@@ -335,7 +366,13 @@ class BasePolicy(BaseModel):
         observation, vectorized_env = self.obs_to_tensor(observation)
 
         with th.no_grad():
-            actions = self._predict(observation, deterministic=deterministic)
+            if isinstance(observation, tuple):
+                actions = th.cat([
+                    self._predict(obs, deterministic=deterministic)
+                    for obs in observation
+                ])
+            else:
+                actions = self._predict(observation, deterministic=deterministic)
         # Convert to numpy
         actions = actions.cpu().numpy()
 
@@ -882,7 +919,9 @@ class ContinuousCritic(BaseModel):
         # when the features_extractor is shared with the actor
         with th.set_grad_enabled(not self.share_features_extractor):
             features = self.extract_features(obs)
-        qvalue_input = th.cat([features, actions], dim=1)
+        if len(actions.size()) > len(features.size()):
+            actions = actions.flatten(-2, -1)
+        qvalue_input = th.cat([features, actions], dim=-1)
         return tuple(q_net(qvalue_input) for q_net in self.q_networks)
 
     def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:

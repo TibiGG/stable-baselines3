@@ -35,6 +35,7 @@ from stable_baselines3.common.utils import (
 )
 from stable_baselines3.common.vec_env import (
     DummyVecEnv,
+    MultiagentVecEnv,
     VecEnv,
     VecNormalize,
     VecTransposeImage,
@@ -169,21 +170,20 @@ class BaseAlgorithm(ABC):
                     self.eval_env = maybe_make_env(env, self.verbose)
 
             env = maybe_make_env(env, self.verbose)
-            env = self._wrap_env(env, self.verbose, monitor_wrapper, is_marl=is_marl)
+            env = self._wrap_env(env, self.verbose, monitor_wrapper, is_marl=self.is_marl)
 
-            if is_marl:
-                self.observation_space = env.observation_space.spaces[0]
-                self.action_space = env.action_space.spaces[0]
-            else:
-                self.observation_space = env.observation_space
-                self.action_space = env.action_space
+            self.observation_space = env.observation_space
+            self.action_space = env.action_space
             self.n_envs = env.num_envs
             self.env = env
 
             if supported_action_spaces is not None:
-                assert isinstance(self.action_space, supported_action_spaces), (
+                action_space = self.action_space
+                if self.is_marl:
+                    action_space = action_space.spaces[0]
+                assert isinstance(action_space, supported_action_spaces), (
                     f"The algorithm only supports {supported_action_spaces} as action spaces "
-                    f"but {self.action_space} was provided"
+                    f"but {action_space} was provided"
                 )
 
             if not support_multi_env and self.n_envs > 1:
@@ -203,8 +203,7 @@ class BaseAlgorithm(ABC):
                     "generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
 
     @staticmethod
-    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True,
-                  is_marl: bool = False) -> VecEnv:
+    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True, is_marl: bool = False) -> VecEnv:
         """ "
         Wrap environment with the appropriate wrappers if needed.
         For instance, to have a vectorized environment
@@ -221,8 +220,12 @@ class BaseAlgorithm(ABC):
                     print("Wrapping the env with a `Monitor` wrapper")
                 env = Monitor(env)
             if verbose >= 1:
-                print("Wrapping the env in a DummyVecEnv.")
-            env = DummyVecEnv([lambda: env])
+                env_name = "DummyVecEnv" if not self.is_marl else "MultiagentVecEnv"
+                print(f"Wrapping the env in a {env_name}.")
+            if not is_marl:
+                env = DummyVecEnv([lambda: env])
+            else:
+                env = MultiagentVecEnv([lambda: env])
 
         if not is_marl:
             # Make sure that dict-spaces are not nested (not supported)

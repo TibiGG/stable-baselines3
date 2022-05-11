@@ -86,7 +86,7 @@ def preprocess_obs(
     obs: th.Tensor,
     observation_space: spaces.Space,
     normalize_images: bool = True,
-) -> Union[th.Tensor, Dict[str, th.Tensor]]:
+) -> Union[th.Tensor, Dict[str, th.Tensor], Tuple[Dict[str, th.Tensor]]]:
     """
     Preprocess observation to be to a neural network.
     For images, it normalizes the values by dividing them by 255 (to have values in [0, 1])
@@ -123,9 +123,16 @@ def preprocess_obs(
     elif isinstance(observation_space, spaces.Dict):
         # Do not modify by reference the original observation
         preprocessed_obs = {}
-        for key, _obs in obs.items():
-            preprocessed_obs[key] = preprocess_obs(_obs, observation_space[key], normalize_images=normalize_images)
+        for key, subobs in obs.items():
+            preprocessed_obs[key] = preprocess_obs(subobs, observation_space[key], normalize_images=normalize_images)
         return preprocessed_obs
+
+    elif isinstance(observation_space, spaces.Tuple):
+        # Do not modify by reference the original observation
+        return tuple(
+            preprocess_obs(subobs, obs_space, normalize_images=normalize_images)
+            for subobs, obs_space in zip(obs, observation_space.spaces)
+        )
 
     else:
         raise NotImplementedError(f"Preprocessing not implemented for {observation_space}")
@@ -190,7 +197,7 @@ def get_action_dim(action_space: spaces.Space) -> int:
     """
     if isinstance(action_space, spaces.Tuple):
         # Assumption: no Tuple-based observation which is not Multi-Agent
-        action_space = action_space.spaces[0]
+        return get_action_dim(action_space.spaces[0]) * len(action_space.spaces)
 
     if isinstance(action_space, spaces.Box):
         return int(np.prod(action_space.shape))

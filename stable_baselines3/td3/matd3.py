@@ -5,6 +5,7 @@ import numpy as np
 import torch as th
 from torch.nn import functional as F
 
+from stable_baselines3 import TD3
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
@@ -14,7 +15,7 @@ from stable_baselines3.common.utils import polyak_update
 from stable_baselines3.td3.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, TD3Policy, MultiAgentMultiInputPolicy
 
 
-class TD3(OffPolicyAlgorithm):
+class MATD3(TD3):
     """
     Twin Delayed DDPG (TD3)
     Addressing Function Approximation Error in Actor-Critic Methods.
@@ -60,13 +61,6 @@ class TD3(OffPolicyAlgorithm):
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     """
-
-    policy_aliases: Dict[str, Type[BasePolicy]] = {
-        "MlpPolicy": MlpPolicy,
-        "CnnPolicy": CnnPolicy,
-        "MultiInputPolicy": MultiInputPolicy,
-        "MultiAgentMultiInputPolicy": MultiAgentMultiInputPolicy,
-    }
 
     def __init__(
         self,
@@ -117,29 +111,9 @@ class TD3(OffPolicyAlgorithm):
             device=device,
             create_eval_env=create_eval_env,
             seed=seed,
-            sde_support=False,
             optimize_memory_usage=optimize_memory_usage,
-            supported_action_spaces=(gym.spaces.Box),
-            support_multi_env=True,
             is_marl=is_marl,
         )
-
-        self.policy_delay = policy_delay
-        self.target_noise_clip = target_noise_clip
-        self.target_policy_noise = target_policy_noise
-
-        if _init_setup_model:
-            self._setup_model()
-
-    def _setup_model(self) -> None:
-        super()._setup_model()
-        self._create_aliases()
-
-    def _create_aliases(self) -> None:
-        self.actor = self.policy.actor
-        self.actor_target = self.policy.actor_target
-        self.critic = self.policy.critic
-        self.critic_target = self.policy.critic_target
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -160,10 +134,13 @@ class TD3(OffPolicyAlgorithm):
                 # Select action according to policy and add clipped noise
                 noise = replay_data.actions.clone().data.normal_(0, self.target_policy_noise)
                 noise = noise.clamp(-self.target_noise_clip, self.target_noise_clip)
-                next_actions = (self.actor_target(replay_data.next_observations) + noise).clamp(-1, 1)
+                next_actions = (th.cat(tuple(
+                        self.actor_target(next_observation).unsqueeze(axis=1)
+                          for next_observation in replay_data.next_observations
+                          ), axis=1) + noise).clamp(-1, 1)
 
                 # Compute the next Q-values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=1)
+                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=-1)
                 next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
 
@@ -181,13 +158,19 @@ class TD3(OffPolicyAlgorithm):
 
             # Delayed policy updates
             if self._n_updates % self.policy_delay == 0:
-                # Compute actor loss
-                actor_loss = -self.critic.q1_forward(replay_data.observations, self.actor(replay_data.observations)).mean()
-                actor_losses.append(actor_loss.item())
+                # Compute actors loss
+                actors_losses = []
+                for i, obs in enumerate(replay_data.observations):
+                    actor_actions = self.actor(obs)
+                    actors_actions = replay_data.actions.detach().clone()
+                    actors_actions[:, i] = actor_actions
+                    actors_losses.append(-self.critic.q1_forward(obs, actors_actions).mean())
+                actors_loss = th.tensor(actors_losses).mean()
+                actor_losses.append(actors_loss.item())
 
                 # Optimize the actor
                 self.actor.optimizer.zero_grad()
-                actor_loss.backward()
+                actors_loss.backward()
                 self.actor.optimizer.step()
 
                 polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)

@@ -10,7 +10,7 @@ import numpy as np
 import torch as th
 
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer
+from stable_baselines3.common.buffers import DictReplayBuffer, ReplayBuffer, MultiAgentReplayBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.noise import ActionNoise, VectorizedActionNoise
 from stable_baselines3.common.policies import BasePolicy
@@ -171,9 +171,11 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        # Use DictReplayBuffer if needed
+        # Use DictReplayBuffer or MultiAgentReplayBuffer if needed
         if self.replay_buffer_class is None:
-            if isinstance(self.observation_space, gym.spaces.Dict):
+            if isinstance(self.observation_space, gym.spaces.Tuple):
+                self.replay_buffer_class = MultiAgentReplayBuffer
+            elif isinstance(self.observation_space, gym.spaces.Dict):
                 self.replay_buffer_class = DictReplayBuffer
             else:
                 self.replay_buffer_class = ReplayBuffer
@@ -491,7 +493,15 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         # first observation of the next episode
         for i, done in enumerate(dones):
             if done and infos[i].get("terminal_observation") is not None:
-                if isinstance(next_obs, dict):
+                if isinstance(next_obs, tuple):
+                    for j, next_obs_ in enumerate(infos[i]["terminal_observation"]):
+                        # VecNormalize normalizes the terminal observation
+                        if self._vec_normalize_env is not None:
+                            next_obs_ = self._vec_normalize_env.unnormalize_obs(next_obs_)
+                        # Replace next obs for the correct envs
+                        for key in next_obs[j].keys():
+                            next_obs[j][key][i] = next_obs_[key]
+                elif isinstance(next_obs, dict):
                     next_obs_ = infos[i]["terminal_observation"]
                     # VecNormalize normalizes the terminal observation
                     if self._vec_normalize_env is not None:
