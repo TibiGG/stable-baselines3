@@ -220,7 +220,7 @@ class BaseAlgorithm(ABC):
                     print("Wrapping the env with a `Monitor` wrapper")
                 env = Monitor(env)
             if verbose >= 1:
-                env_name = "DummyVecEnv" if not self.is_marl else "MultiagentVecEnv"
+                env_name = "DummyVecEnv" if not is_marl else "MultiagentVecEnv"
                 print(f"Wrapping the env in a {env_name}.")
             if not is_marl:
                 env = DummyVecEnv([lambda: env])
