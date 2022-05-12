@@ -5,7 +5,8 @@ import gym
 import numpy as np
 
 from stable_baselines3.common import base_class
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, \
+    is_vecenv_wrapped, MultiagentVecEnv
 
 
 def evaluate_policy(
@@ -18,6 +19,7 @@ def evaluate_policy(
     reward_threshold: Optional[float] = None,
     return_episode_rewards: bool = False,
     warn: bool = True,
+    is_marl: bool = False,
 ) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
     """
     Runs policy for ``n_eval_episodes`` episodes and returns average reward.
@@ -47,6 +49,7 @@ def evaluate_policy(
         per episode will be returned instead of the mean.
     :param warn: If True (default), warns user about lack of a Monitor wrapper in the
         evaluation environment.
+    :param is_marl: If True (non-default), modifies logic to fit marl needs
     :return: Mean reward per episode, std of reward per episode.
         Returns ([float], [int]) when ``return_episode_rewards`` is True, first
         list containing per-episode rewards and second containing per-episode lengths
@@ -57,7 +60,10 @@ def evaluate_policy(
     from stable_baselines3.common.monitor import Monitor
 
     if not isinstance(env, VecEnv):
-        env = DummyVecEnv([lambda: env])
+        if not is_marl:
+            env = DummyVecEnv([lambda: env])
+        else:
+            env = MultiagentVecEnv([lambda: env])
 
     is_monitor_wrapped = is_vecenv_wrapped(env, VecMonitor) or env.env_is_wrapped(Monitor)[0]
 
@@ -78,6 +84,8 @@ def evaluate_policy(
     episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype="int")
 
     current_rewards = np.zeros(n_envs)
+    if is_marl:
+        current_rewards = np.zeros((n_envs, env.n_agents))
     current_lengths = np.zeros(n_envs, dtype="int")
     observations = env.reset()
     states = None

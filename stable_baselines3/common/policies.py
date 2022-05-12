@@ -932,4 +932,7 @@ class ContinuousCritic(BaseModel):
         """
         with th.no_grad():
             features = self.extract_features(obs)
-        return self.q_networks[0](th.cat([features, actions], dim=1))
+        if len(actions.size()) > len(features.size()):
+            actions = actions.flatten(-2, -1)
+        qvalue_input = th.cat([features, actions], dim=-1)
+        return self.q_networks[0](qvalue_input)

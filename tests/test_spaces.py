@@ -5,6 +5,7 @@ import pytest
 from stable_baselines3 import A2C, DDPG, DQN, PPO, SAC, TD3
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.vec_env import MultiagentVecEnv
 from stable_baselines3.td3.matd3 import MATD3
 
 
@@ -123,7 +124,7 @@ def test_multi_agent_identity_spaces(model_class, env):
 
     model.learn(total_timesteps=500)
 
-    evaluate_policy(model, env, n_eval_episodes=5, warn=False)
+    evaluate_policy(model, env, n_eval_episodes=5, warn=False, is_marl=True)
 
 
 @pytest.mark.parametrize("model_class", [A2C, DDPG, DQN, PPO, SAC, TD3])

@@ -148,7 +148,9 @@ class MATD3(TD3):
             current_q_values = self.critic(replay_data.observations, replay_data.actions)
 
             # Compute critic loss
-            critic_loss = sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
+            # TODO: come here & play with means/sums if critic does not converge as expected.
+            critic_loss = sum(F.mse_loss(current_q_value, target_q_values)
+                              for current_q_value in current_q_values)
             critic_losses.append(critic_loss.item())
 
             # Optimize the critics
@@ -164,8 +166,12 @@ class MATD3(TD3):
                     actor_actions = self.actor(obs)
                     actors_actions = replay_data.actions.detach().clone()
                     actors_actions[:, i] = actor_actions
-                    actors_losses.append(-self.critic.q1_forward(obs, actors_actions).mean())
-                actors_loss = th.tensor(actors_losses).mean()
+                    actors_losses.append(
+                        -self.critic.q1_forward(replay_data.observations,
+                                                actors_actions).mean())
+                # TODO: consider doing "backwards" on each separate loss
+                #       reason: grad_fn name changes
+                actors_loss = sum(actors_losses)
                 actor_losses.append(actors_loss.item())
 
                 # Optimize the actor
