@@ -105,7 +105,7 @@ def test_identity_spaces(model_class, env):
 
 
 @pytest.mark.parametrize("model_class", [MATD3])
-@pytest.mark.parametrize("env", [DummyTupleDict(3)])
+@pytest.mark.parametrize("env", [DummyTupleDict(4)])
 def test_multi_agent_identity_spaces(model_class, env):
     """
     Additional tests for MATD3 to check observation space support

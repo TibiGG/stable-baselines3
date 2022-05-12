@@ -368,9 +368,9 @@ class BasePolicy(BaseModel):
         with th.no_grad():
             if isinstance(observation, tuple):
                 actions = th.cat([
-                    self._predict(obs, deterministic=deterministic)
+                    self._predict(obs, deterministic=deterministic).unsqueeze(1)
                     for obs in observation
-                ])
+                ], dim=1)
             else:
                 actions = self._predict(observation, deterministic=deterministic)
         # Convert to numpy
@@ -922,6 +922,8 @@ class ContinuousCritic(BaseModel):
         if len(actions.size()) > len(features.size()):
             actions = actions.flatten(-2, -1)
         qvalue_input = th.cat([features, actions], dim=-1)
+        if len(qvalue_input.size()) > 2:
+            qvalue_input = qvalue_input.flatten(-2, -1)
         return tuple(q_net(qvalue_input) for q_net in self.q_networks)
 
     def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:
@@ -935,4 +937,6 @@ class ContinuousCritic(BaseModel):
         if len(actions.size()) > len(features.size()):
             actions = actions.flatten(-2, -1)
         qvalue_input = th.cat([features, actions], dim=-1)
+        if len(qvalue_input.size()) > 2:
+            qvalue_input = qvalue_input.flatten(-2, -1)
         return self.q_networks[0](qvalue_input)

@@ -318,8 +318,10 @@ class TupleCombinedExtractor(BaseFeaturesExtractor):
         encoded_tensor_list = []
 
         for obs in observations:
+            obs_encoded_tensor_list = []
             for key, extractor in self.extractors.items():
-                encoded_tensor_list.append(extractor(obs[key]))
+                obs_encoded_tensor_list.append(extractor(obs[key]))
+            encoded_tensor_list.append(th.cat(obs_encoded_tensor_list, dim=1).unsqueeze(1))
         return th.cat(encoded_tensor_list, dim=1)
 
 
