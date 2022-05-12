@@ -19,7 +19,7 @@ def evaluate_policy(
     reward_threshold: Optional[float] = None,
     return_episode_rewards: bool = False,
     warn: bool = True,
-    is_marl: bool = False,
+    is_marl: bool = True, # TODO: find way to infer this better, so you don't need to modify in place here every time
 ) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
     """
     Runs policy for ``n_eval_episodes`` episodes and returns average reward.
