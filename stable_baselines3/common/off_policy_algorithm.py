@@ -18,7 +18,7 @@ from stable_baselines3.common.save_util import load_from_pkl, save_to_pkl
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, RolloutReturn, Schedule, TrainFreq, TrainFrequencyUnit
 from stable_baselines3.common.utils import safe_mean, should_collect_more_steps
 from stable_baselines3.common.vec_env import VecEnv
-from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
+from stable_baselines3.her import HerReplayBuffer, HerMAReplayBuffer
 
 
 class OffPolicyAlgorithm(BaseAlgorithm):
@@ -196,6 +196,31 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 )
 
             self.replay_buffer = HerReplayBuffer(
+                self.env,
+                self.observation_space,
+                self.action_space,
+                self.buffer_size,
+                device=self.device,
+                replay_buffer=replay_buffer,
+                **self.replay_buffer_kwargs,
+            )
+
+        elif self.replay_buffer_class == HerMAReplayBuffer:
+            assert self.env is not None, "You must pass an environment when using `HerMAReplayBuffer`"
+
+            # If using offline sampling, we need a classic replay buffer too
+            if self.replay_buffer_kwargs.get("online_sampling", True):
+                replay_buffer = None
+            else:
+                replay_buffer = MultiAgentReplayBuffer(
+                    self.buffer_size,
+                    self.observation_space,
+                    self.action_space,
+                    device=self.device,
+                    optimize_memory_usage=self.optimize_memory_usage,
+                )
+
+            self.replay_buffer = HerMAReplayBuffer(
                 self.env,
                 self.observation_space,
                 self.action_space,

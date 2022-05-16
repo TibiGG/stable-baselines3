@@ -6,55 +6,21 @@ import numpy as np
 import torch as th
 from gym import spaces
 
-from stable_baselines3.common.buffers import DictReplayBuffer
+from stable_baselines3.common.buffers import MultiAgentReplayBuffer
 from stable_baselines3.common.preprocessing import get_obs_shape
-from stable_baselines3.common.type_aliases import DictReplayBufferSamples
+from stable_baselines3.common.type_aliases import MultiAgentReplayBufferSamples
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 from stable_baselines3.her.goal_selection_strategy import KEY_TO_GOAL_STRATEGY, GoalSelectionStrategy
+from stable_baselines3.her.her_replay_buffer import get_time_limit
 
 
-def get_time_limit(env: VecEnv, current_max_episode_length: Optional[int]) -> int:
-    """
-    Get time limit from environment.
-
-    :param env: Environment from which we want to get the time limit.
-    :param current_max_episode_length: Current value for max_episode_length.
-    :return: max episode length
-    """
-    # try to get the attribute from environment
-    if current_max_episode_length is None:
-        try:
-            current_max_episode_length = env.get_attr("spec")[0].max_episode_steps
-            # Raise the error because the attribute is present but is None
-            if current_max_episode_length is None:
-                raise AttributeError
-        # if not available check if a valid value was passed as an argument
-        except AttributeError:
-            raise ValueError(
-                "The max episode length could not be inferred.\n"
-                "You must specify a `max_episode_steps` when registering the environment,\n"
-                "use a `gym.wrappers.TimeLimit` wrapper "
-                "or pass `max_episode_length` to the model constructor"
-            )
-    return current_max_episode_length
-
-
-class HerReplayBuffer(DictReplayBuffer):
+class HerMAReplayBuffer(MultiAgentReplayBuffer):
     """
     Hindsight Experience Replay (HER) buffer.
     Paper: https://arxiv.org/abs/1707.01495
 
-    .. warning::
-
-      For performance reasons, the maximum number of steps per episodes must be specified.
-      In most cases, it will be inferred if you specify ``max_episode_steps`` when registering the environment
-      or if you use a ``gym.wrappers.TimeLimit`` (and ``env.spec`` is not None).
-      Otherwise, you can directly pass ``max_episode_length`` to the replay buffer constructor.
-
-
-    Replay buffer for sampling HER (Hindsight Experience Replay) transitions.
-    In the online sampling case, these new transitions will not be saved in the replay buffer
-    and will only be created at sampling time.
+    This version of the HER buffer is adapted to Multi-Agent.
+    Paper: https://link.springer.com/article/10.1007/s13042-022-01505-x
 
     :param env: The training environment
     :param buffer_size: The size of the buffer measured in transitions.
@@ -77,7 +43,7 @@ class HerReplayBuffer(DictReplayBuffer):
         action_space: spaces.Space,
         buffer_size: int,
         device: Union[th.device, str] = "cpu",
-        replay_buffer: Optional[DictReplayBuffer] = None,
+        replay_buffer: Optional[MultiAgentReplayBuffer] = None,
         max_episode_length: Optional[int] = None,
         n_sampled_goal: int = 4,
         goal_selection_strategy: Union[GoalSelectionStrategy, str] = "future",
@@ -108,6 +74,8 @@ class HerReplayBuffer(DictReplayBuffer):
         # storage for transitions of current episode for offline sampling
         # for online sampling, it replaces the "classic" replay buffer completely
         her_buffer_size = buffer_size if online_sampling else self.max_episode_length
+        # Keep track of the amount of agents present in the environment
+        self.n_agents = len(observation_space.spaces)
 
         self.env = env
         self.buffer_size = her_buffer_size
@@ -129,26 +97,26 @@ class HerReplayBuffer(DictReplayBuffer):
         self.episode_steps = 0
 
         # Get shape of observation and goal (usually the same)
-        self.obs_shape = get_obs_shape(observation_space.spaces["observation"])
-        self.goal_shape = get_obs_shape(observation_space.spaces["achieved_goal"])
+        self.obs_shape = get_obs_shape(observation_space.spaces[0].spaces["observation"])
+        self.goal_shape = get_obs_shape(observation_space.spaces[0].spaces["achieved_goal"])
 
         # input dimensions for buffer initialization
         input_shape = {
             "observation": (self.env.num_envs,) + self.obs_shape,
             "achieved_goal": (self.env.num_envs,) + self.goal_shape,
             "desired_goal": (self.env.num_envs,) + self.goal_shape,
-            "action": (self.action_dim,),
-            "reward": (1,),
+            "action": (self.env.num_envs, self.action_dim),
+            "reward": (self.env.num_envs,),
             "next_obs": (self.env.num_envs,) + self.obs_shape,
             "next_achieved_goal": (self.env.num_envs,) + self.goal_shape,
             "next_desired_goal": (self.env.num_envs,) + self.goal_shape,
             "done": (1,),
         }
         self._observation_keys = ["observation", "achieved_goal", "desired_goal"]
-        self._buffer = {
+        self._buffer = tuple({
             key: np.zeros((self.max_episode_stored, self.max_episode_length, *dim), dtype=np.float32)
             for key, dim in input_shape.items()
-        }
+        } for _ in range(self.n_agents))
         # Store info dicts are it can be used to compute the reward (e.g. continuity cost)
         self.info_buffer = [deque(maxlen=self.max_episode_length) for _ in range(self.max_episode_stored)]
         # episode length storage, needed for episodes which has less steps than the maximum length
@@ -189,13 +157,13 @@ class HerReplayBuffer(DictReplayBuffer):
 
         self.env = env
 
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:
+    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> MultiAgentReplayBufferSamples:
         """
         Abstract method from base class.
         """
         raise NotImplementedError()
 
-    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:
+    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> MultiAgentReplayBufferSamples:
         """
         Sample function for online sampling of HER transition,
         this replaces the "regular" replay buffer ``sample()``
@@ -265,7 +233,8 @@ class HerReplayBuffer(DictReplayBuffer):
         else:
             raise ValueError(f"Strategy {self.goal_selection_strategy} for sampling goals not supported!")
 
-        return self._buffer["next_achieved_goal"][her_episode_indices, transitions_indices]
+        return tuple(self._buffer[i]["next_achieved_goal"][her_episode_indices, transitions_indices]
+                     for i in range(self.n_agents))
 
     def _sample_transitions(
         self,
@@ -273,7 +242,7 @@ class HerReplayBuffer(DictReplayBuffer):
         maybe_vec_env: Optional[VecNormalize],
         online_sampling: bool,
         n_sampled_goal: Optional[int] = None,
-    ) -> Union[DictReplayBufferSamples, Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], np.ndarray, np.ndarray]]:
+    ) -> Union[MultiAgentReplayBufferSamples, Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], np.ndarray, np.ndarray]]:
         """
         :param batch_size: Number of element to sample (only used for online sampling)
         :param env: associated gym VecEnv to normalize the observations/rewards
@@ -324,64 +293,75 @@ class HerReplayBuffer(DictReplayBuffer):
                 her_indices = np.arange(len(episode_indices))
 
         # get selected transitions
-        transitions = {key: self._buffer[key][episode_indices, transitions_indices].copy() for key in self._buffer.keys()}
+        transitions = tuple({key: buf[key][episode_indices, transitions_indices].copy()
+                             for key in buf.keys()}
+                            for buf in self._buffer)
 
         # sample new desired goals and relabel the transitions
         new_goals = self.sample_goals(episode_indices, her_indices, transitions_indices)
-        transitions["desired_goal"][her_indices] = new_goals
+        for i_agent in range(self.n_agents):
+            transitions[i_agent]["desired_goal"][her_indices] = new_goals[i_agent]
 
-        # Convert info buffer to numpy array
-        transitions["info"] = np.array(
-            [
-                self.info_buffer[episode_idx][transition_idx]
-                for episode_idx, transition_idx in zip(episode_indices, transitions_indices)
-            ]
-        )
-
-        # Edge case: episode of one timesteps with the future strategy
-        # no virtual transition can be created
-        if len(her_indices) > 0:
-            # Vectorized computation of the new reward
-            transitions["reward"][her_indices, 0] = self.env.env_method(
-                "compute_reward",
-                # the new state depends on the previous state and action
-                # s_{t+1} = f(s_t, a_t)
-                # so the next_achieved_goal depends also on the previous state and action
-                # because we are in a GoalEnv:
-                # r_t = reward(s_t, a_t) = reward(next_achieved_goal, desired_goal)
-                # therefore we have to use "next_achieved_goal" and not "achieved_goal"
-                transitions["next_achieved_goal"][her_indices, 0],
-                # here we use the new desired goal
-                transitions["desired_goal"][her_indices, 0],
-                transitions["info"][her_indices, 0],
+            # Convert info buffer to numpy array
+            transitions[i_agent]["info"] = np.array(
+                [
+                    self.info_buffer[episode_idx][transition_idx]
+                    for episode_idx, transition_idx in zip(episode_indices, transitions_indices)
+                ]
             )
+
+            # Edge case: episode of one timesteps with the future strategy
+            # no virtual transition can be created
+            if len(her_indices) > 0:
+                # Vectorized computation of the new reward
+                transitions[i_agent]["reward"][her_indices, 0] = self.env.env_method(
+                    "compute_reward",
+                    # the new state depends on the previous state and action
+                    # s_{t+1} = f(s_t, a_t)
+                    # so the next_achieved_goal depends also on the previous state and action
+                    # because we are in a GoalEnv:
+                    # r_t = reward(s_t, a_t) = reward(next_achieved_goal, desired_goal)
+                    # therefore we have to use "next_achieved_goal" and not "achieved_goal"
+                    transitions[i_agent]["next_achieved_goal"][her_indices, 0],
+                    # here we use the new desired goal
+                    transitions[i_agent]["desired_goal"][her_indices, 0],
+                    transitions[i_agent]["info"][her_indices, 0],
+                )
 
         # concatenate observation with (desired) goal
         observations = self._normalize_obs(transitions, maybe_vec_env)
 
         # HACK to make normalize obs and `add()` work with the next observation
-        next_observations = {
-            "observation": transitions["next_obs"],
-            "achieved_goal": transitions["next_achieved_goal"],
+        next_observations = tuple({
+            "observation": transitions[i_agent]["next_obs"],
+            "achieved_goal": transitions[i_agent]["next_achieved_goal"],
             # The desired goal for the next observation must be the same as the previous one
-            "desired_goal": transitions["desired_goal"],
-        }
+            "desired_goal": transitions[i_agent]["desired_goal"],
+        } for i_agent in range(self.n_agents))
         next_observations = self._normalize_obs(next_observations, maybe_vec_env)
 
         if online_sampling:
-            next_obs = {key: self.to_torch(next_observations[key][:, 0, :]) for key in self._observation_keys}
+            next_obs = tuple({key: self.to_torch(next_observations[i_agent][key][:, 0, :])
+                        for key in self._observation_keys}
+                             for i_agent in range(self.n_agents))
 
-            normalized_obs = {key: self.to_torch(observations[key][:, 0, :]) for key in self._observation_keys}
+            normalized_obs = tuple({key: self.to_torch(observations[i_agent][key][:, 0, :])
+                                    for key in self._observation_keys}
+                                   for i_agent in range(self.n_agents))
 
-            return DictReplayBufferSamples(
+            actions = th.cat([self.to_torch(transition["action"]) for transition in transitions], axis=1)
+            rewards = th.cat([self.to_torch(self._normalize_reward(transition["reward"], maybe_vec_env))
+                        for transition in transitions], axis=1)
+            return MultiAgentReplayBufferSamples(
                 observations=normalized_obs,
-                actions=self.to_torch(transitions["action"]),
+                actions=actions,
                 next_observations=next_obs,
-                dones=self.to_torch(transitions["done"]),
-                rewards=self.to_torch(self._normalize_reward(transitions["reward"], maybe_vec_env)),
+                dones=self.to_torch(transitions[0]["done"]), # dones are the same for now, and only one
+                rewards=rewards,
             )
         else:
-            return observations, next_observations, transitions["action"], transitions["reward"]
+            return observations, next_observations, actions, rewards
+
 
     def add(
         self,
@@ -403,15 +383,16 @@ class HerReplayBuffer(DictReplayBuffer):
         else:
             done_ = done
 
-        self._buffer["observation"][self.pos][self.current_idx] = obs["observation"]
-        self._buffer["achieved_goal"][self.pos][self.current_idx] = obs["achieved_goal"]
-        self._buffer["desired_goal"][self.pos][self.current_idx] = obs["desired_goal"]
-        self._buffer["action"][self.pos][self.current_idx] = action
-        self._buffer["done"][self.pos][self.current_idx] = done_
-        self._buffer["reward"][self.pos][self.current_idx] = reward
-        self._buffer["next_obs"][self.pos][self.current_idx] = next_obs["observation"]
-        self._buffer["next_achieved_goal"][self.pos][self.current_idx] = next_obs["achieved_goal"]
-        self._buffer["next_desired_goal"][self.pos][self.current_idx] = next_obs["desired_goal"]
+        for i in range(self.n_agents):
+            self._buffer[i]["observation"][self.pos][self.current_idx] = obs[i]["observation"]
+            self._buffer[i]["achieved_goal"][self.pos][self.current_idx] = obs[i]["achieved_goal"]
+            self._buffer[i]["desired_goal"][self.pos][self.current_idx] = obs[i]["desired_goal"]
+            self._buffer[i]["action"][self.pos][self.current_idx] = action[:,i]
+            self._buffer[i]["done"][self.pos][self.current_idx] = done_
+            self._buffer[i]["reward"][self.pos][self.current_idx] = reward[:,i]
+            self._buffer[i]["next_obs"][self.pos][self.current_idx] = next_obs[i]["observation"]
+            self._buffer[i]["next_achieved_goal"][self.pos][self.current_idx] = next_obs[i]["achieved_goal"]
+            self._buffer[i]["next_desired_goal"][self.pos][self.current_idx] = next_obs[i]["desired_goal"]
 
         # When doing offline sampling
         # Add real transition to normal replay buffer

@@ -742,7 +742,7 @@ class MultiAgentReplayBuffer(ReplayBuffer):
 
         # Same reshape, for actions
         if isinstance(self.action_space, spaces.Discrete):
-            action = action.reshape((self.n_envs, self.action_dim, self.n_agents))
+            action = action.reshape((self.n_envs, self.n_agents, self.action_dim))
 
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
