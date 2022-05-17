@@ -712,6 +712,7 @@ class BaseAlgorithm(ABC):
             custom_objects: Optional[Dict[str, Any]] = None,
             print_system_info: bool = False,
             force_reset: bool = True,
+            is_marl: bool = False,
             **kwargs,
     ) -> "BaseAlgorithm":
         """
@@ -765,7 +766,7 @@ class BaseAlgorithm(ABC):
 
         if env is not None:
             # Wrap first if needed
-            env = cls._wrap_env(env, data["verbose"])
+            env = cls._wrap_env(env, data["verbose"], is_marl=is_marl)
             # Check if given env is valid
             check_for_correct_spaces(env, data["observation_space"],
                                      data["action_space"])
