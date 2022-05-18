@@ -576,6 +576,8 @@ def permute_observations_actions(
         observations: Tuple[Dict[str, np.ndarray]],
         actions: th.Tensor) \
         -> Tuple[List[Tuple[Any, ...]], List[ndarray]]:
+    if len(observations) == 1:
+        return [observations], [actions]
     permuted_obs = []
     permuted_acts = []
     actions = list(th.transpose(actions, 0, 1))
