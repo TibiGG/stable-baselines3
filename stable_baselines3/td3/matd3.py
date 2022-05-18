@@ -144,7 +144,7 @@ class MATD3(TD3):
                     permute_observations_actions(replay_data.observations, replay_data.actions)
                 next_observations_list, next_actions_list = \
                     permute_observations_actions(replay_data.next_observations, next_actions)
-                rewards_list = list(np.transpose(replay_data.rewards, (1, 0)))
+                rewards_list = list(th.transpose(replay_data.rewards, 0, 1))
                 # NOTE: Reward list transposition necessary to get the batch size after the number of agents
                 # e.g. (batch_size, n_agent, shape) -> (n_agent, batch_size, shape)
 

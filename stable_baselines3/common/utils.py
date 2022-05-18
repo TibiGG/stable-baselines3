@@ -574,11 +574,11 @@ def get_system_info(print_info: bool = True) -> Tuple[Dict[str, str], str]:
 
 def permute_observations_actions(
         observations: Tuple[Dict[str, np.ndarray]],
-        actions: np.ndarray) \
+        actions: th.Tensor) \
         -> Tuple[List[Tuple[Any, ...]], List[ndarray]]:
     permuted_obs = []
     permuted_acts = []
-    actions = np.transpose(actions, (1, 0, 2)).tolist()
+    actions = list(th.transpose(actions, 0, 1))
     obs_act_pairs = list(zip(observations, actions))
     for i, (ego_obs, ego_act) in enumerate(obs_act_pairs):
         rest_obs_acts = obs_act_pairs.copy()
@@ -588,5 +588,5 @@ def permute_observations_actions(
         permuted_rest_obs, permuted_rest_acts = zip(*rest_obs_acts)
         permuted_rest_obs = tuple(permuted_rest_obs)
         permuted_obs.append((ego_obs, ) + permuted_rest_obs)
-        permuted_acts.append(th.as_tensor(np.transpose(np.array([ego_act, *permuted_rest_acts], dtype=np.float32), (1, 0, 2))))
+        permuted_acts.append(th.transpose(th.stack([ego_act, *permuted_rest_acts]), 0, 1))
     return permuted_obs, permuted_acts
