@@ -583,9 +583,10 @@ def permute_observations_actions(
     for i, (ego_obs, ego_act) in enumerate(obs_act_pairs):
         rest_obs_acts = obs_act_pairs.copy()
         del rest_obs_acts[i]
-        np.random.shuffle(rest_obs_acts)
+        # TODO: add way to randomise this for all observations and actions in the same way.
+        # np.random.shuffle(rest_obs_acts)
         permuted_rest_obs, permuted_rest_acts = zip(*rest_obs_acts)
         permuted_rest_obs = tuple(permuted_rest_obs)
         permuted_obs.append((ego_obs, ) + permuted_rest_obs)
-        permuted_acts.append(np.transpose(np.array([ego_act, *permuted_rest_acts]), (1, 0, 2)))
+        permuted_acts.append(th.as_tensor(np.transpose(np.array([ego_act, *permuted_rest_acts], dtype=np.float32), (1, 0, 2))))
     return permuted_obs, permuted_acts

@@ -11,7 +11,7 @@ from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
-from stable_baselines3.common.utils import polyak_update
+from stable_baselines3.common.utils import polyak_update, permute_observations_actions
 from stable_baselines3.td3.policies import CnnPolicy, MlpPolicy, MultiInputPolicy, TD3Policy, MultiAgentMultiInputPolicy
 
 
@@ -112,7 +112,7 @@ class MATD3(TD3):
             create_eval_env=create_eval_env,
             seed=seed,
             optimize_memory_usage=optimize_memory_usage,
-            is_marl=is_marl,
+            is_marl=True,
         )
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
@@ -140,37 +140,55 @@ class MATD3(TD3):
                           ), axis=1) + noise).clamp(-1, 1)
 
                 # Compute the next Q-values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=-1)
-                next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
-                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
+                observations_list, actions_list = \
+                    permute_observations_actions(replay_data.observations, replay_data.actions)
+                next_observations_list, next_actions_list = \
+                    permute_observations_actions(replay_data.next_observations, next_actions)
+                rewards_list = list(np.transpose(replay_data.rewards, (1, 0)))
+                # NOTE: Reward list transposition necessary to get the batch size after the number of agents
+                # e.g. (batch_size, n_agent, shape) -> (n_agent, batch_size, shape)
 
-            # Get current Q-values estimates for each critic network
-            current_q_values = self.critic(replay_data.observations, replay_data.actions)
+            critics_losses = []
+            for observation, action, reward, next_observation, next_action \
+                    in zip(observations_list,
+                           actions_list,
+                           rewards_list,
+                           next_observations_list,
+                           next_actions_list
+                           ):
+                with th.no_grad():
+                    next_q_values = th.cat(self.critic_target(next_observation, next_action), dim=-1)
+                    next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
+                    target_q_values = reward.unsqueeze(-1) + (1 - replay_data.dones) * self.gamma * next_q_values
 
-            # Compute critic loss
-            # TODO: come here & play with means/sums if critic does not converge as expected.
-            critic_loss = sum(F.mse_loss(current_q_value, target_q_values)
-                              for current_q_value in current_q_values)
-            critic_losses.append(critic_loss.item())
+                # Get current Q-values estimates for each critic network
+                current_q_values = self.critic(observation, action)
+
+                # Compute critic loss
+                critic_loss = sum(F.mse_loss(current_q_value, target_q_values)
+                                  for current_q_value in current_q_values)
+                critics_losses.append(critic_loss)
+
+            # Accumulate losses over all critic instances
+            critics_loss = sum(critics_losses)
+            critic_losses.append(critics_loss.item())
 
             # Optimize the critics
             self.critic.optimizer.zero_grad()
-            critic_loss.backward()
+            critics_loss.backward()
             self.critic.optimizer.step()
 
             # Delayed policy updates
             if self._n_updates % self.policy_delay == 0:
                 # Compute actors loss
                 actors_losses = []
-                for i, obs in enumerate(replay_data.observations):
-                    actor_actions = self.actor(obs)
-                    actors_actions = replay_data.actions.detach().clone()
+                for i, (observations, actions) in enumerate(zip(observations_list, actions_list)):
+                    actor_actions = self.actor(observations[0])
+                    actors_actions = actions.detach().clone()
                     actors_actions[:, i] = actor_actions
                     actors_losses.append(
-                        -self.critic.q1_forward(replay_data.observations,
+                        -self.critic.q1_forward(observations,
                                                 actors_actions).mean())
-                # TODO: consider doing "backwards" on each separate loss
-                #       reason: grad_fn name changes
                 actors_loss = sum(actors_losses)
                 actor_losses.append(actors_loss.item())
 
